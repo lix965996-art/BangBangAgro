@@ -45,6 +45,9 @@
               <div>
                 <div class="farm-name">{{ scope.row.farm }}</div>
                 <div class="farm-addr"><i class="el-icon-location-outline"></i> {{ scope.row.address || '位置未录入' }}</div>
+                <div v-if="scope.row.coordinates" class="farm-boundary-hint">
+                  <i class="el-icon-aim"></i> 已绘制地块边界
+                </div>
               </div>
             </div>
           </template>
@@ -738,8 +741,11 @@ export default {
       const addressText = this.form.address || '已设置位置'
       this.$message.success(`${addressText}${areaText}${districtText}`)
       
-      // 默认不显示预览，用户可以点击按钮查看
-      this.showPreviewMap = false
+      // 选点完成后自动回显边界预览，便于确认新增地块是否正确
+      this.showPreviewMap = true
+      this.$nextTick(() => {
+        this.renderPreviewMap()
+      })
     },
     
     // 渲染预览地图
@@ -968,6 +974,7 @@ export default {
 
 .farm-name { font-weight: bold; font-size: 14px; color: #303133; }
 .farm-addr { font-size: 12px; color: #909399; margin-top: 2px; }
+.farm-boundary-hint { font-size: 12px; color: #67c23a; margin-top: 2px; }
 .keeper-tag { color: #606266; font-size: 13px; }
 
 .trace-btn { color: #d97706; font-weight: bold; }

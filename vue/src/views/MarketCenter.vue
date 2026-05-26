@@ -468,13 +468,21 @@ export default {
       const isEdit = !!payload.id;
 
       this.request.post('/onlineSale', payload).then(res => {
-        if (res.code === '200') {
+        if (res.code === '200' || res.code === 200) {
           this.$message.success(isEdit ? '上架档案已更新' : '已成功发布上架')
           this.onlineDialogVisible = false
           this.loadOnline()
         } else {
           this.$message.error(res.msg || '保存失败')
         }
+      }).catch(err => {
+        const d = err.response && err.response.data
+        const msg =
+          (d && (d.msg || d.message)) ||
+          err.message ||
+          '网络或服务异常，请打开浏览器控制台查看详情'
+        this.$message.error('发布上架失败：' + msg)
+        console.error('POST /onlineSale failed', err)
       })
     },
 

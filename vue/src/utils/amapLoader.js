@@ -51,12 +51,19 @@ const ensurePlugins = (plugins) => {
 
 export const resetAmapLoader = () => {
   loaderPromise = null
+  delete window.AMap
+  delete window._AMapSecurityConfig
+  window.__AMAP_LOADED_KEY__ = undefined
+  window.__AMAP_LOADED_SECURITY__ = undefined
   removeKnownScripts()
 }
 
 export const loadAmapSdk = async (options = {}) => {
-  const key = options.key || mapConfig.amap.jsKey || process.env.VUE_APP_AMAP_JS_KEY || ''
-  const securityCode = options.securityCode || process.env.VUE_APP_AMAP_SECURITY_CODE || mapConfig.amap.securityCode || ''
+  // 优先使用环境变量作为单一配置源，避免 key/scode 跨文件不一致
+  const key = options.key || process.env.VUE_APP_AMAP_JS_KEY || mapConfig.amap.jsKey || ''
+  const securityCode = options.forceNoSecurity
+    ? ''
+    : (options.securityCode || process.env.VUE_APP_AMAP_SECURITY_CODE || mapConfig.amap.securityCode || '')
   const version = options.version || mapConfig.amap.version || '2.0'
   const plugins = Array.from(new Set([...(options.plugins || [])].filter(Boolean)))
 
@@ -64,12 +71,17 @@ export const loadAmapSdk = async (options = {}) => {
     throw new Error('AMAP_KEY_MISSING')
   }
 
-  // 如果之前加载的 SDK 是不同 Key 的版本，强制清除重新加载
-  if (window.AMap && window.AMap.Map && window.__AMAP_LOADED_KEY__ !== key) {
-    console.log('[amapLoader] 检测到 Key 变更，清除旧 SDK 重新加载')
+  // 如果 key 或 scode 发生变化，强制清除重新加载
+  if (
+    window.AMap &&
+    window.AMap.Map &&
+    (window.__AMAP_LOADED_KEY__ !== key || window.__AMAP_LOADED_SECURITY__ !== securityCode)
+  ) {
+    console.log('[amapLoader] 检测到 Key/SCode 变更，清除旧 SDK 重新加载')
     delete window.AMap
     delete window._AMapSecurityConfig
     window.__AMAP_LOADED_KEY__ = undefined
+    window.__AMAP_LOADED_SECURITY__ = undefined
     removeKnownScripts()
     loaderPromise = null
   }
@@ -89,6 +101,7 @@ export const loadAmapSdk = async (options = {}) => {
       const handleLoad = () => {
         if (window.AMap && window.AMap.Map) {
           window.__AMAP_LOADED_KEY__ = key
+          window.__AMAP_LOADED_SECURITY__ = securityCode
           resolve(window.AMap)
           return
         }

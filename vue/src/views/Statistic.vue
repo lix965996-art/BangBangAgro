@@ -327,10 +327,15 @@ export default {
         }
       }).then(res => {
         this.loading = false
-        
-        if (res.data && res.data.records) {
+
+        const ok = res && (res.code === '200' || res.code === 200)
+        const page = res && res.data
+        const records = page && Array.isArray(page.records) ? page.records : null
+
+        // 注意：[] 在 JS 中为真值，原先 if (res.data.records) 会在「有接口但 0 条」时不走降级，页面会一直空白
+        if (ok && records && records.length > 0) {
           // 为每条真实数据计算健康分和 GDD
-          this.fieldData = res.data.records.map(item => {
+          this.fieldData = records.map(item => {
             // 如果温度或湿度为空，使用 STM32 数据
             const temp = item.temperature || this.stm32Data.temperature || 25
             const humidity = item.soilhumidity || this.stm32Data.humidity || 50
@@ -349,10 +354,16 @@ export default {
               aiAdvice: this.generateAIAdvice(temp, humidity, item.state)
             }
           })
-          this.total = res.data.total
+          this.total = page.total || records.length
         } else {
-          // 后端无数据时使用 Mock 数据作为降级
-          console.warn('后端返回空数据，使用 Mock 数据演示')
+          if (ok && records && records.length === 0) {
+            console.warn(
+              '农田列表为 0 条：若已登录非管理员，后端会按 statistic.keeper=当前用户名 过滤；' +
+                '库里 keeper 为空或与登录名不一致时会查不到数据。以下为演示用 Mock 降级。'
+            )
+          } else {
+            console.warn('后端返回异常或结构不符，使用 Mock 数据演示')
+          }
           this.loadMockData()
         }
       }).catch(err => {
@@ -472,6 +483,58 @@ export default {
       this.dialogFormVisible = true
       this.form = {}
       this.dynamicTags = []
+      this.inputVisible = false
+      this.inputValue = ''
+    },
+
+    showInput() {
+      this.inputVisible = true
+      this.inputValue = ''
+      this.$nextTick(() => {
+        const ref = this.$refs.saveTagInput
+        if (ref && typeof ref.focus === 'function') {
+          ref.focus()
+        }
+      })
+    },
+
+    handleClose(tag) {
+      this.dynamicTags = this.dynamicTags.filter((t) => t !== tag)
+    },
+
+    handleInputConfirm() {
+      const v = (this.inputValue || '').trim()
+      if (v && !this.dynamicTags.includes(v)) {
+        this.dynamicTags.push(v)
+      }
+      this.inputVisible = false
+      this.inputValue = ''
+    },
+
+    save() {
+      this.form.crop = (this.dynamicTags || []).join(',')
+      if (!this.form.farm || !String(this.form.farm).trim()) {
+        this.$message.warning('请填写农田名称')
+        return
+      }
+      if (!this.form.crop) {
+        this.$message.warning('请至少添加一种作物')
+        return
+      }
+      this.request
+        .post('/statistic', this.form)
+        .then((res) => {
+          if (res.code === '200' || res.code === 200) {
+            this.$message.success('保存成功')
+            this.dialogFormVisible = false
+            this.loadData()
+          } else {
+            this.$message.error(res.msg || '保存失败')
+          }
+        })
+        .catch((err) => {
+          this.$message.error('提交失败：' + (err.message || '网络异常'))
+        })
     },
     
     handleSizeChange(size) {

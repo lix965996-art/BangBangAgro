@@ -1,0 +1,20 @@
+{
+  "name": "bang-bang-agro-android",
+  "version": "1.0.0",
+  "description": "帮帮农智慧农业安卓App",
+  "main": "index.js",
+  "scripts": {
+    "build": "npx cap sync android",
+    "open": "npx cap open android",
+    "sync": "npx cap sync",
+    "android": "npx cap run android"
+  },
+  "keywords": ["agriculture", "android", "capacitor"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^7.6.5",
+    "@capacitor/core": "^8.3.4"
+  }
+}

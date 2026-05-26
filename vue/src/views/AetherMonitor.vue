@@ -47,7 +47,7 @@
           <div class="metric-trend">
             <canvas ref="tempSparkline" width="200" height="24"></canvas>
           </div>
-          <div class="metric-desc">实时传感器监测</div>
+          <div class="metric-desc">实时传感器监测<span v-if="sensorSourceLabel" class="source-hint">{{ sensorSourceLabel }}</span></div>
         </div>
       </el-col>
 
@@ -64,21 +64,33 @@
           <div class="metric-trend">
             <canvas ref="humiSparkline" width="200" height="24"></canvas>
           </div>
-          <div class="metric-desc">实时传感器监测</div>
+          <div class="metric-desc">实时传感器监测<span v-if="sensorSourceLabel" class="source-hint">{{ sensorSourceLabel }}</span></div>
         </div>
       </el-col>
 
       <el-col :span="6">
-        <div class="metric-card">
+        <div class="metric-card metric-card--light">
           <div class="metric-header">
-            <span class="metric-icon">🌬️</span>
-            <span class="metric-label">VPD 气压差</span>
-            <span class="status-indicator normal"></span>
+            <span class="metric-icon">💡</span>
+            <span class="metric-label">灯照开关</span>
+            <span class="status-indicator" :class="ledOn ? 'normal' : 'inactive'"></span>
           </div>
-          <div class="vpd-gauge-container">
-            <div ref="vpdGauge" style="width: 100%; height: 50px;"></div>
+          <div class="light-switch-body">
+            <el-switch
+              v-model="ledOn"
+              active-text="开"
+              inactive-text="关"
+              active-color="#10b981"
+              inactive-color="#cbd5e1"
+              :disabled="!deviceOnline || ledSwitchLoading"
+              @change="onLedSwitchChange"
+            />
           </div>
-          <div class="metric-desc">适宜范围 0.8-1.2 kPa</div>
+          <div class="metric-desc">
+            <template v-if="!deviceOnline">设备离线，无法控制</template>
+            <template v-else-if="ledSwitchLoading">正在下发指令…</template>
+            <template v-else>{{ ledOn ? '补光灯已开启（IoT）' : '补光灯已关闭' }}</template>
+          </div>
         </div>
       </el-col>
     </el-row>
@@ -264,15 +276,24 @@ export default {
       historyData: [],
       tempChartInstance: null,
       humiChartInstance: null,
-      vpdChartInstance: null,
       pollingTimer: null,
+      ledSwitchLoading: false,
       historyTimer: null,
-      weatherTimer: null
+      weatherTimer: null,
+      /** 后端 /aether/device/status 的 source：OneNET / Database / Cache */
+      sensorSource: ''
+    }
+  },
+  computed: {
+    sensorSourceLabel() {
+      if (!this.sensorSource || this.sensorSource === 'OneNET') return '';
+      const map = { Database: '缓存库', Cache: '内存缓存' };
+      const name = map[this.sensorSource] || this.sensorSource;
+      return `（当前来源：${name}，非 OneNET 直连）`;
     }
   },
   mounted() {
     this.initCharts();
-    this.initVPDGauge();
     this.fetchDeviceStatus();
     this.fetchWeatherData();
     this.fetchHistoryData();
@@ -287,7 +308,6 @@ export default {
     if (this.weatherTimer) clearInterval(this.weatherTimer);
     if (this.tempChartInstance && !this.tempChartInstance.isDisposed()) this.tempChartInstance.dispose();
     if (this.humiChartInstance && !this.humiChartInstance.isDisposed()) this.humiChartInstance.dispose();
-    if (this.vpdChartInstance && !this.vpdChartInstance.isDisposed()) this.vpdChartInstance.dispose();
     if (this.chartResizeHandler) window.removeEventListener('resize', this.chartResizeHandler);
   },
   methods: {
@@ -325,18 +345,12 @@ export default {
         const res = await this.request.get('/aether/device/status');
         if (res.code === '200' && res.data) {
           const data = res.data;
+          this.sensorSource = data.source || '';
           this.deviceOnline = data.online;
           this.temperature = data.temperature;
           this.humidity = data.humidity;
           this.ledOn = data.led === 1;
           this.checkThresholds();
-          
-          // 当温湿度更新时，同步更新 VPD 仪表盘数据
-          if (this.vpdChartInstance) {
-             this.vpdChartInstance.setOption({
-               series: [{ data: [{ value: this.calculateVPD() }] }]
-             });
-          }
         }
       } catch (error) {
         this.deviceOnline = false;
@@ -401,9 +415,6 @@ export default {
         this.chartResizeHandler = () => {
           if (this.trendChartInstance && !this.trendChartInstance.isDisposed()) {
             this.trendChartInstance.resize();
-          }
-          if (this.vpdChartInstance && !this.vpdChartInstance.isDisposed()) {
-            this.vpdChartInstance.resize();
           }
         };
         window.addEventListener('resize', this.chartResizeHandler);
@@ -523,58 +534,28 @@ export default {
       ctx.stroke();
     },
 
-    // ✨ 核心修复：重写的极其精致的 VPD 仪表盘配置 ✨
-    initVPDGauge() {
-      this.$nextTick(() => {
-        if (!this.$refs.vpdGauge) return;
-        const vpdChart = echarts.init(this.$refs.vpdGauge);
-        const vpd = this.calculateVPD();
-        const option = {
-          series: [{
-            type: 'gauge', 
-            startAngle: 180, 
-            endAngle: 0, 
-            min: 0, 
-            max: 2, 
-            radius: '130%', // ✨ 拉大半径填充容器
-            center: ['50%', '85%'], // ✨ 圆心下移，防止上半圆被压扁
-            splitNumber: 4,
-            axisLine: { 
-              lineStyle: { 
-                width: 10, // 加粗色带
-                color: [[0.4, '#ef4444'], [0.6, '#10b981'], [1, '#ef4444']] 
-              } 
-            },
-            pointer: { 
-              itemStyle: { color: '#475569' }, 
-              length: '55%', 
-              width: 3 
-            },
-            axisTick: { show: false }, 
-            splitLine: { show: false }, 
-            axisLabel: { show: false }, // ✨ 隐藏拥挤的刻度数字，保持极简
-            detail: { 
-              valueAnimation: true, 
-              formatter: '{value} kPa', 
-              fontSize: 16, // 字号调小一点以适应空间
-              fontWeight: '800', 
-              color: '#059669', 
-              offsetCenter: [0, '-25%'] // ✨ 把数值文字完美居中放入半圆内部
-            },
-            data: [{ value: vpd }]
-          }]
-        };
-        vpdChart.setOption(option);
-        this.vpdChartInstance = vpdChart;
-      });
-    },
-    
-    calculateVPD() {
-      if (this.temperature === null || this.humidity === null) return 0;
-      const temp = this.temperature;
-      const rh = this.humidity / 100;
-      const svp = 0.6108 * Math.exp((17.27 * temp) / (temp + 237.3));
-      return Number((svp * (1 - rh)).toFixed(2));
+    async onLedSwitchChange(on) {
+      if (!this.deviceOnline) {
+        this.ledOn = false;
+        return;
+      }
+      const prev = !on;
+      this.ledSwitchLoading = true;
+      try {
+        const res = await this.request.post('/aether/device/control/led', { led: on ? 1 : 0 });
+        const ok = res && (res.code === '200' || res.code === 200);
+        if (!ok) {
+          throw new Error((res && res.msg) || '控制失败');
+        }
+        const msg = (res.data && res.data.message) || (on ? '补光灯已开启' : '补光灯已关闭');
+        if (this.$message) this.$message.success(msg);
+      } catch (e) {
+        this.ledOn = prev;
+        const err = (e && e.response && e.response.data && e.response.data.msg) || (e && e.message) || '控制失败';
+        if (this.$message) this.$message.error(err);
+      } finally {
+        this.ledSwitchLoading = false;
+      }
     },
     getWeatherIcon(text, timeStr) {
       let isNight = false;
@@ -653,6 +634,7 @@ export default {
 .metric-label { flex: 1; font-size: 13px; color: #6b7280; font-weight: 600; }
 
 .status-indicator { width: 8px; height: 8px; border-radius: 50%; background: #10b981; }
+.status-indicator.inactive { background: #9ca3af; animation: none; }
 .status-indicator.warning { background: #f59e0b; animation: warningPulse 2s infinite; }
 
 @keyframes warningPulse {
@@ -664,9 +646,16 @@ export default {
 .metric-value .unit { font-size: 16px; color: #6b7280; font-weight: 500; margin-left: 4px; }
 .metric-trend { height: 24px; opacity: 0.6; }
 .metric-desc { font-size: 12px; color: #9ca3af; }
+.source-hint { color: #f59e0b; font-size: 11px; margin-left: 4px; }
 
-/* 专门限制VPD容器的布局 */
-.vpd-gauge-container { flex: 1; display: flex; align-items: flex-end; justify-content: center; overflow: hidden; }
+.light-switch-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+}
+.metric-card--light .metric-desc { min-height: 32px; }
 
 .weather-row { margin-bottom: 4px; display: flex; align-items: stretch; }
 .weather-row .el-col { display: flex; }

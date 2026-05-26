@@ -4,7 +4,10 @@
   "private": true,
   "scripts": {
     "serve": "vue-cli-service serve",
-    "build": "vue-cli-service build"
+    "build": "vue-cli-service build",
+    "build:electron": "vue-cli-service build --mode electron",
+    "electron:preview": "npm run build:electron && electron electron/main.js",
+    "electron:pack": "npm run build:electron && electron-builder --win --x64"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
@@ -14,6 +17,7 @@
     "echarts-gl": "^2.0.9",
     "element-ui": "^2.15.6",
     "gsap": "^3.13.0",
+    "leaflet": "^1.9.4",
     "three": "^0.181.1",
     "vue": "^2.6.11",
     "vue-router": "^3.2.0",
@@ -23,9 +27,41 @@
     "@vue/cli-plugin-babel": "~4.5.0",
     "@vue/cli-plugin-router": "~4.5.0",
     "@vue/cli-service": "~4.5.0",
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3",
     "sass": "^1.94.2",
     "sass-loader": "^10.5.2",
     "vue-template-compiler": "^2.6.11"
+  },
+  "main": "electron/main.js",
+  "build": {
+    "appId": "com.bangbangagro.desktop",
+    "productName": "BangBangAgro",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   },
   "browserslist": [
     "> 1%",

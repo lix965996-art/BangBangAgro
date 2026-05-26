@@ -18,6 +18,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.Base64;
+import java.util.Locale;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -118,6 +119,20 @@ public class OneNetServiceImpl implements IOneNetService {
             return "";
         }
     }
+
+    /** 与 OneNET 物模型标识符对齐：temp、temperature（大小写不敏感） */
+    private static boolean isTempIdentifier(String id) {
+        if (id == null) return false;
+        String s = id.trim().toLowerCase(Locale.ROOT);
+        return "temp".equals(s) || "temperature".equals(s) || "air_temperature".equals(s);
+    }
+
+    /** humi、humidity（大小写不敏感） */
+    private static boolean isHumiIdentifier(String id) {
+        if (id == null) return false;
+        String s = id.trim().toLowerCase(Locale.ROOT);
+        return "humi".equals(s) || "humidity".equals(s) || "air_humidity".equals(s);
+    }
     
     @Override
     public Map<String, Object> getDeviceData() {
@@ -166,9 +181,9 @@ public class OneNetServiceImpl implements IOneNetService {
                         String id = (String) item.get("identifier");
                         if (id == null) { log.warn("[OneNET 调试] identifier 为 null，跳过"); continue; }
                         log.warn("[OneNET调试] identifier={}, value={}", id, item.get("value"));
-                        if ("temp".equals(id)) tempItem = item;
-                        else if ("humi".equals(id)) humiItem = item;
-                        else if ("led".equals(id)) ledItem = item;
+                        if (isTempIdentifier(id)) tempItem = item;
+                        else if (isHumiIdentifier(id)) humiItem = item;
+                        else if ("led".equalsIgnoreCase(id)) ledItem = item;
                     }
 
                     Object tempVal = tempItem != null ? tempItem.get("value") : null;
@@ -194,13 +209,11 @@ public class OneNetServiceImpl implements IOneNetService {
                         result.put("led", ledState);
                         result.put("online", online);
                     } else {
-                        // 属性值为null，但设备可能在线（刚连接尚未上报数据）
-                        log.warn("[OneNET] 属性值为null，设备在线状态: {}", online);
-                        result.put("success", true);
-                        result.put("temperature", online ? round(25.0 + Math.random() * 5, 1) : round(25.0 + Math.random() * 5, 1));
-                        result.put("humidity", online ? round(55.0 + Math.random() * 15, 1) : round(55.0 + Math.random() * 15, 1));
-                        result.put("led", 0);
+                        // 不再用随机数冒充实时值（会导致界面与真实传感器完全不符）
+                        log.warn("[OneNET] 未解析到有效温湿度（请确认物模型属性标识符为 temp/humi 或 temperature/humidity，且设备已上报）。在线: {}", online);
+                        result.put("success", false);
                         result.put("online", online);
+                        result.put("error", "OneNET 未返回温湿度：检查物模型标识符是否与代码一致或设备是否上报数据");
                     }
                 } else {
                     log.warn("data字段不是List类型: {}", (dataObj != null ? dataObj.getClass().getName() : "null"));

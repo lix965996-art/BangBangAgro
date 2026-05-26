@@ -290,9 +290,8 @@ export default {
     async save() {
       this.btnLoading = true;
       try {
-        const isEdit = !!this.form.id;
-        const method = isEdit ? 'put' : 'post';
-        const res = await this.request[method]("/role", this.form);
+        // 与 RoleController 一致：仅 @PostMapping 做 saveOrUpdate，无 PUT
+        const res = await this.request.post("/role", this.form);
         if (res.code === '200') {
           this.$message.success("角色参数写入成功");
           this.dialogFormVisible = false;

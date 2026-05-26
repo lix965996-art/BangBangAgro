@@ -1,0 +1,14 @@
+{
+  "appId": "com.bangbangagro.app",
+  "appName": "帮帮农",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "buildOptions": {
+      "keystorePath": null,
+      "keystoreAlias": null
+    }
+  }
+}

@@ -45,10 +45,15 @@
           <div slot="header" class="clearfix sandbox-header">
             <div class="header-title-group">
               <span class="section-title"><i class="el-icon-magic-stick"></i> 视觉模型分析沙盒</span>
-              <span :class="['service-badge', serviceOnline ? 'online' : 'offline']">
-                <i :class="serviceOnline ? 'el-icon-success' : 'el-icon-error'"></i> 
-                {{ serviceOnline ? '模型引擎在线' : '引擎离线' }}
-              </span>
+              <el-tooltip
+                placement="bottom"
+                :content="analysisServiceBadge.tip"
+              >
+                <span :class="['service-badge', analysisServiceBadge.cls]">
+                  <i :class="analysisServiceBadge.icon"></i>
+                  {{ analysisServiceBadge.label }}
+                </span>
+              </el-tooltip>
             </div>
 
             <el-radio-group v-model="mode" size="small" class="mode-switch">
@@ -319,6 +324,32 @@ export default {
       return current ? current.label : '未设置';
     },
     serviceNote() { return this.serviceOnline ? `支持 ${this.availableCropLabels}` : this.serviceHintText; },
+    /** 摄像头/流媒体 ≠ Python 检测服务；避免画面已出仍显示「引擎离线」造成误解 */
+    analysisServiceBadge() {
+      if (this.serviceOnline) {
+        return {
+          cls: 'online',
+          icon: 'el-icon-success',
+          label: '分析服务在线',
+          tip: '后端已连通 Python 检测服务（integrated_api_server），可执行「执行 AI 分析」。'
+        };
+      }
+      if (this.streamActive) {
+        return {
+          cls: 'degraded',
+          icon: 'el-icon-warning-outline',
+          label: '画面已接通 · 分析服务离线',
+          tip:
+            '当前 MJPEG 画面在浏览器内已加载，但「分析服务」指 Spring 转发的 Python 模型接口（/crop-analysis/health）。请在本机启动 TomatoDetection 下的 integrated_api_server.py，并在 application.yml 配置 python.api-url 指向该服务。'
+        };
+      }
+      return {
+        cls: 'offline',
+        icon: 'el-icon-error',
+        label: '分析服务离线',
+        tip: '未检测到 Python 检测服务。请启动 integrated_api_server.py 并检查后端 python.api-url。'
+      };
+    },
     selectedFarm() { return this.farms.find(item => item.id === this.selectedFarmId) || null; },
     availableCropOptions() {
       if (!this.supportedCrops.length) return CROP_OPTIONS;
@@ -509,11 +540,12 @@ export default {
     async fetchServiceStatus() {
       try {
         const [healthRes, modelsRes] = await Promise.all([this.request.get('/crop-analysis/health'), this.request.get('/crop-analysis/models')]);
-        this.serviceOnline = healthRes.code === '200';
-        this.serviceHintText = this.serviceOnline ? '模型就绪' : (healthRes.msg || '离线');
-        if (modelsRes.code === '200' && modelsRes.data && modelsRes.data.disease_models) {
+        const healthOk = healthRes && (healthRes.code === '200' || healthRes.code === 200);
+        this.serviceOnline = !!healthOk;
+        this.serviceHintText = this.serviceOnline ? '模型就绪' : (healthRes && healthRes.msg) || '离线';
+        if ((modelsRes.code === '200' || modelsRes.code === 200) && modelsRes.data && modelsRes.data.disease_models) {
           this.supportedCrops = Object.keys(modelsRes.data.disease_models);
-        } else if (healthRes.code === '200' && healthRes.data && Array.isArray(healthRes.data.supported_crops)) {
+        } else if (healthOk && healthRes.data && Array.isArray(healthRes.data.supported_crops)) {
           this.supportedCrops = healthRes.data.supported_crops;
         } else {
           this.supportedCrops = [];
@@ -717,6 +749,7 @@ export default {
 }
 .service-badge.online { color: #34d399; background: rgba(52, 211, 153, 0.1); }
 .service-badge.offline { color: #ff9b74; background: rgba(255, 155, 116, 0.1); }
+.service-badge.degraded { color: #b45309; background: rgba(245, 158, 11, 0.14); }
 
 /* 原生 Element UI 单选按钮美化 */
 ::v-deep .mode-switch .el-radio-button__inner {

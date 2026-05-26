@@ -4,6 +4,8 @@ import store from '@/store'
 
 Vue.use(VueRouter)
 
+const routerMode = process.env.VUE_APP_ROUTER_MODE || 'history'
+
 const baseRoutes = [
   {
     path: '/login',
@@ -61,13 +63,13 @@ function buildManageRoute() {
 }
 
 const router = new VueRouter({
-  mode: 'history',
+  mode: routerMode,
   routes: baseRoutes
 })
 
 export const resetRouter = () => {
   router.matcher = new VueRouter({
-    mode: 'history',
+    mode: routerMode,
     routes: baseRoutes
   }).matcher
 }

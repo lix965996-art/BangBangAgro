@@ -33,6 +33,7 @@ springboot/logs/
 
 ## Vue
 vue/node_modules/
+vue/node_modules/.cache/
 vue/dist/
 vue/.env.local
 vue/.env.development.local
@@ -81,6 +82,10 @@ temp/
 uploads/
 .tmp/
 .cache/
+**/.cache/
+*.docx
+*.pptx
+*.xlsx
 
 # Local startup scripts
 TomatoDetection/start_*.bat
@@ -122,3 +127,6 @@ jest/
 # Local configuration
 .vscode/settings.json
 !.gitignore
+
+# 本地 API 密钥（通义等），勿提交
+springboot/src/main/resources/application-local.yml

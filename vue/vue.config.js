@@ -2,7 +2,7 @@ module.exports = {
   lintOnSave: false,
   
   // 生产环境公共路径，云端部署时根据实际情况修改
-  publicPath: process.env.NODE_ENV === 'production' ? '/' : '/',
+  publicPath: process.env.VUE_APP_ELECTRON === 'true' ? './' : '/',
   
   // 输出目录
   outputDir: 'dist',

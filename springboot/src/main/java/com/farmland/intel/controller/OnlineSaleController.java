@@ -42,8 +42,13 @@ public class OnlineSaleController {
             if (inventory == null) {
                 return Result.error("400", "库存商品不存在");
             }
-            if (onlineSale.getQuantity() > inventory.getNumber()) {
-                return Result.error("400", "出售数量不能大于库存数量(" + inventory.getNumber() + ")");
+            int stock = inventory.getNumber() != null ? inventory.getNumber() : 0;
+            int qty = onlineSale.getQuantity() != null ? onlineSale.getQuantity() : 0;
+            if (qty < 1) {
+                return Result.error("400", "上架数量至少为 1");
+            }
+            if (qty > stock) {
+                return Result.error("400", "出售数量不能大于库存数量(" + stock + ")");
             }
             // 自动填充商品信息
             if (onlineSale.getId() == null) {

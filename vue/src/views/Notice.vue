@@ -141,7 +141,16 @@
         </el-form-item>
         <el-form-item label="内容">
           <el-input type="textarea" :rows="5" v-model="form.content" placeholder="输入内容后，可点击下方按钮进行 AI 润色"></el-input>
-          <el-button type="text" icon="el-icon-cpu" @click="mockAIPolish" style="color: #38bdf8; margin-top: 10px;">Qwen 智能润色</el-button>
+          <el-input
+            v-model="form.polishHint"
+            type="textarea"
+            :rows="2"
+            maxlength="200"
+            show-word-limit
+            placeholder="润色侧重（可选）：如「语气正式」「突出防灾」「压缩到 100 字内」——会传给通义千问"
+            style="margin-top: 8px"
+          />
+          <el-button type="text" icon="el-icon-cpu" :loading="polishLoading" @click="polishWithQwen" style="color: #38bdf8; margin-top: 6px;">Qwen 智能润色</el-button>
         </el-form-item>
         <el-row>
           <el-col :span="12">
@@ -187,7 +196,8 @@ export default {
       pageNum: 1,
       pageSize: 5,
       name: "",
-      form: {},
+      form: { polishHint: "" },
+      polishLoading: false,
       dialogFormVisible: false,
       user: localStorage.getItem("user") ? JSON.parse(localStorage.getItem("user")) : {}
     }
@@ -224,15 +234,58 @@ export default {
       this.pageNum = val;
       this.load();
     },
-    // 模拟 AI 润色
-    mockAIPolish() {
-      if (!this.form.content) return this.$message.warning("请先填写一点内容");
-      const loading = this.$loading({ text: 'Qwen 大模型正在重组语言逻辑...', background: 'rgba(0,0,0,0.7)' });
-      setTimeout(() => {
-        loading.close();
-        this.form.content = "【AI 优化】" + this.form.content + "。 (系统分析：该描述符合真菌感染特征，建议重点关注。)";
-        this.$message.success("润色完成");
-      }, 800);
+    /** 从 /api/chat/qwen-proxy 的 data 字段取出纯文本润色结果 */
+    extractPolishText(data) {
+      if (data == null) return "";
+      if (typeof data === "string") return data.trim();
+      if (typeof data === "object") {
+        if (data.content != null) return String(data.content).trim();
+        if (data.text != null) return String(data.text).trim();
+        if (data.polished != null) return String(data.polished).trim();
+      }
+      return String(data).trim();
+    },
+    /** 调用后端通义千问代理，真实润色农情正文（需已登录且服务端配置 qwen.api-key） */
+    polishWithQwen() {
+      if (!this.form.content || !String(this.form.content).trim()) {
+        return this.$message.warning("请先填写一点内容");
+      }
+      const title = (this.form.name && String(this.form.name).trim()) ? this.form.name.trim() : "（无标题）";
+      const hint = this.form.polishHint != null ? String(this.form.polishHint).trim() : "";
+      const extra = hint ? `\n\n【润色侧重】${hint}` : "";
+      const systemPrompt =
+        "你是农业信息化系统的文案编辑。用户要发布「田间/农情」类短讯。\n" +
+        "要求：在尊重原文事实的前提下润色语言（通顺、专业、适合张贴或系统内展示）；不要编造原文未出现的病虫害名称或数据；" +
+        "不要加「作为 AI」等套话；不要加前后缀如「润色后：」；输出一段可直接粘贴的正文即可。";
+      const prompt =
+        `标题：${title}\n\n待润色正文：\n${this.form.content.trim()}${extra}\n\n请只输出润色后的正文。`;
+      this.polishLoading = true;
+      this.request
+        .post("/api/chat/qwen-proxy", { prompt, systemPrompt })
+        .then((res) => {
+          const ok = res && (res.code === 200 || res.code === "200");
+          if (!ok) {
+            this.$message.error(res.message || res.msg || "润色失败");
+            return;
+          }
+          const text = this.extractPolishText(res.data);
+          if (!text) {
+            this.$message.warning("模型未返回有效文本，请稍后重试");
+            return;
+          }
+          this.form.content = text;
+          this.$message.success("润色完成");
+        })
+        .catch((err) => {
+          const msg =
+            (err.response && err.response.data && (err.response.data.message || err.response.data.msg)) ||
+            err.message ||
+            "请求失败";
+          this.$message.error(msg);
+        })
+        .finally(() => {
+          this.polishLoading = false;
+        });
     },
     // 模拟 AI 分析
     mockAnalyze() {
@@ -244,7 +297,9 @@ export default {
       });
     },
     save() {
-      this.request.post("/notice", this.form).then(res => {
+      const payload = { ...this.form };
+      delete payload.polishHint;
+      this.request.post("/notice", payload).then(res => {
         if (res.code === '200') {
           this.$message.success(this.form.id ? "日志更新成功" : "日志发布成功");
           this.dialogFormVisible = false;
@@ -255,12 +310,16 @@ export default {
       })
     },
     handleAdd() {
-      this.form = {}; // 关键修复：需要先重置表单避免旧数据污染
-      this.form = { time: new Date().toISOString().replace('T', ' ').substring(0, 19), user: this.user.username };
+      this.form = {
+        polishHint: "",
+        time: new Date().toISOString().replace("T", " ").substring(0, 19),
+        user: this.user.username
+      };
       this.dialogFormVisible = true;
     },
     handleEdit(row) {
-      this.form = Object.assign({}, JSON.parse(JSON.stringify(row))); // 关键防弹：确保响应式不会丢
+      const copy = JSON.parse(JSON.stringify(row));
+      this.form = Object.assign({}, copy, { polishHint: copy.polishHint || "" });
       this.dialogFormVisible = true;
     },
     del(id) {

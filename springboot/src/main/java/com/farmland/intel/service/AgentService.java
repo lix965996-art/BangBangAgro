@@ -7,6 +7,7 @@ import cn.hutool.json.JSONUtil;
 import com.farmland.intel.agent.AgentAction;
 import com.farmland.intel.agent.AgentActionResult;
 import com.farmland.intel.agent.AgentPlan;
+import com.farmland.intel.entity.AgentUserMemory;
 import com.farmland.intel.entity.Statistic;
 import com.farmland.intel.entity.Sales;
 import com.farmland.intel.entity.Purchase;
@@ -41,11 +42,32 @@ public class AgentService {
                  StringUtils.hasText(apiKey) ? "已配置 (长度:" + apiKey.length() + ")" : "未配置");
     }
 
+    /** Service 在异常或映射问题时可能返回 null，统一避免 NPE（曾导致 /api/agent/plan 500）。 */
+    private List<Statistic> listFarmsOrEmpty() {
+        try {
+            if (statisticService == null) {
+                return Collections.emptyList();
+            }
+            List<Statistic> farms = statisticService.list();
+            return farms != null ? farms : Collections.emptyList();
+        } catch (Exception e) {
+            log.warn("读取农田列表失败: {}", e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
     @Value("${qwen.api-url:https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation}")
     private String apiUrl;
 
     @Value("${qwen.model:qwen-max}")
     private String model;
+
+    /** Agent 编排调用通义时的采样参数（与创意写作场景区分，宜偏低以减少答非所问） */
+    @Value("${qwen.agent-temperature:0.42}")
+    private double agentTemperature;
+
+    @Value("${qwen.agent-top-p:0.88}")
+    private double agentTopP;
 
     @Autowired(required = false)
     private IOneNetService oneNetService;
@@ -76,15 +98,39 @@ public class AgentService {
     
     @Autowired
     private ModelCallLogger modelCallLogger;
+
+    @Autowired(required = false)
+    private IAgentUserMemoryService agentUserMemoryService;
     
     // 最大工具调用轮次，防止无限循环
     private static final int MAX_TOOL_ROUNDS = 8;  // 增加到8轮，支持更复杂的分析
 
+    /** 注入 Qwen 的近期对话条数上限（user+assistant 各算一条） */
+    private static final int MAX_HISTORY_TURNS_MESSAGES = 16;
+    private static final int MAX_HISTORY_CONTENT_CHARS = 1200;
+
+    /**
+     * 兼容旧调用：无用户上下文时不注入记忆。
+     */
+    public AgentPlan buildPlan(String userQuestion) {
+        return buildPlan(null, userQuestion, null);
+    }
+
+    /**
+     * 两参数：无多轮会话上下文。
+     */
+    public AgentPlan buildPlan(Integer userId, String userQuestion) {
+        return buildPlan(userId, userQuestion, null);
+    }
+
     /**
      * 使用 Function Calling 构建智能计划
      * AI 可以主动调用工具获取实时数据，然后基于数据做出智能判断
+     *
+     * @param userId 当前登录用户，用于读取/写入 agent_user_memory；可为 null
+     * @param chatHistory 前端传来的近期多轮对话，role 为 user/assistant，不含本轮最后一条 user 的重复时可由前端控制
      */
-    public AgentPlan buildPlan(String userQuestion) {
+    public AgentPlan buildPlan(Integer userId, String userQuestion, List<Map<String, Object>> chatHistory) {
         AgentPlan plan = new AgentPlan();
         if (!StringUtils.hasText(userQuestion)) {
             plan.setAdvice("请输入问题或指令。");
@@ -94,13 +140,28 @@ public class AgentService {
         log.debug("API Key 检查: {}", StringUtils.hasText(apiKey) ? "已配置" : "未配置");
         if (!StringUtils.hasText(apiKey)) {
             log.warn("通义千问 API Key 未配置，使用规则兜底计划");
-            return fallbackPlan(userQuestion);
+            return fallbackPlan(userId, userQuestion);
+        }
+
+        // 显式写偏好与是否走通义无关：先落库，避免模型把「备注一下」答成「听不懂」且未写入偏好
+        AgentPlan explicitMemory = tryPersistExplicitMemoryPreference(userId, userQuestion);
+        if (explicitMemory != null) {
+            return explicitMemory;
+        }
+
+        String memorySnippet = null;
+        if (userId != null && agentUserMemoryService != null) {
+            try {
+                memorySnippet = agentUserMemoryService.buildPromptSnippet(userId);
+            } catch (Exception e) {
+                log.warn("读取用户 Agent 记忆失败，忽略: {}", e.getMessage());
+            }
         }
 
         try {
             log.debug("开始调用通义千问 Function Calling");
             // 使用 Function Calling 进行多轮对话
-            String result = callQwenWithFunctionCalling(userQuestion);
+            String result = callQwenWithFunctionCalling(userQuestion, memorySnippet, chatHistory);
             log.debug("通义千问返回结果: {}", result != null ? "有内容" : "空结果");
             
             if (StringUtils.hasText(result)) {
@@ -108,11 +169,18 @@ public class AgentService {
                 if (parsed != null && parsed.getAdvice() != null) {
                     String advice = parsed.getAdvice();
                     log.debug("解析成功，advice 长度: {}", advice.length());
-                    // 检查AI是否只是说"正在调用"或"将调用"而没有返回实际数据
-                    if (advice.contains("正在") || advice.contains("将调用") || advice.contains("我将") || 
-                        advice.contains("跳转") || advice.length() < 50) {
-                        log.debug("AI回答不完整，使用兜底逻辑");
-                        return fallbackPlan(userQuestion);
+                    // 仅当 advice 实质为空时才走兜底；不再用「长度<50 / 含我将」等规则误判，
+                    // 否则「你是什么模型」等短答会被扔掉，用户会以为没用上 Qwen。
+                    if (!StringUtils.hasText(advice.trim())) {
+                        log.debug("advice 为空，使用兜底逻辑");
+                        return fallbackPlan(userId, userQuestion);
+                    }
+                    if (userId != null && agentUserMemoryService != null) {
+                        try {
+                            agentUserMemoryService.appendConversationTurn(userId, userQuestion, advice);
+                        } catch (Exception e) {
+                            log.warn("写入对话记忆失败: {}", e.getMessage());
+                        }
                     }
                     return parsed;
                 } else {
@@ -126,19 +194,21 @@ public class AgentService {
         }
 
         log.debug("使用兜底逻辑");
-        return fallbackPlan(userQuestion);
+        return fallbackPlan(userId, userQuestion);
     }
     
     /**
      * 使用 Function Calling 进行多轮对话
      * AI 会根据需要调用工具获取数据，然后给出最终回答
      */
-    private String callQwenWithFunctionCalling(String userQuestion) {
+    private String callQwenWithFunctionCalling(String userQuestion, String memorySnippet,
+                                                 List<Map<String, Object>> chatHistory) {
         // 构建消息列表
         JSONArray messages = new JSONArray();
         messages.add(new JSONObject()
             .put("role", "system")
-            .put("content", buildSystemPrompt()));
+            .put("content", buildSystemPrompt(memorySnippet)));
+        appendChatHistoryMessages(messages, chatHistory);
         messages.add(new JSONObject()
             .put("role", "user")
             .put("content", userQuestion));
@@ -188,10 +258,20 @@ public class AgentService {
             JSONObject choice = choices.getJSONObject(0);
             String finishReason = choice.getStr("finish_reason");
             JSONObject message = choice.getJSONObject("message");
-            
+            if (message == null) {
+                log.error("通义响应 choice 缺少 message，无法解析: {}", response);
+                modelCallLogger.logApiError(model, userQuestion, "NO_MESSAGE", "choice 缺少 message");
+                return null;
+            }
+
             // 检查是否需要调用工具
             if ("tool_calls".equals(finishReason) && message.containsKey("tool_calls")) {
                 JSONArray toolCalls = message.getJSONArray("tool_calls");
+                if (toolCalls == null || toolCalls.isEmpty()) {
+                    log.error("finish_reason=tool_calls 但 tool_calls 为空: {}", response);
+                    modelCallLogger.logApiError(model, userQuestion, "EMPTY_TOOL_CALLS", "tool_calls 为空");
+                    return null;
+                }
                 int toolCallCount = toolCalls.size();
                 totalToolCalls += toolCallCount;
                 log.debug("AI 请求调用 {} 个工具", toolCallCount);
@@ -205,8 +285,23 @@ public class AgentService {
                 // 执行每个工具调用
                 for (int i = 0; i < toolCalls.size(); i++) {
                     JSONObject toolCall = toolCalls.getJSONObject(i);
+                    if (toolCall == null) {
+                        log.warn("跳过空 tool_calls[{}]", i);
+                        continue;
+                    }
                     String toolCallId = toolCall.getStr("id");
+                    if (!StringUtils.hasText(toolCallId)) {
+                        toolCallId = "call_" + i;
+                    }
                     JSONObject function = toolCall.getJSONObject("function");
+                    if (function == null) {
+                        log.warn("tool_call {} 缺少 function，返回占位结果", toolCallId);
+                        messages.add(new JSONObject()
+                                .put("role", "tool")
+                                .put("tool_call_id", toolCallId)
+                                .put("content", "{\"error\":\"tool_call 缺少 function 字段\"}"));
+                        continue;
+                    }
                     String functionName = function.getStr("name");
                     String argumentsStr = function.getStr("arguments");
                     
@@ -238,6 +333,39 @@ public class AgentService {
         modelCallLogger.logApiError(model, userQuestion, "MAX_ROUNDS", "达到最大工具调用轮次: " + MAX_TOOL_ROUNDS);
         return null;
     }
+
+    /**
+     * 在 system 之后、本轮 user 之前插入近期多轮对话（仅 user/assistant，截断防超长）。
+     */
+    private void appendChatHistoryMessages(JSONArray messages, List<Map<String, Object>> chatHistory) {
+        if (chatHistory == null || chatHistory.isEmpty()) {
+            return;
+        }
+        int from = Math.max(0, chatHistory.size() - MAX_HISTORY_TURNS_MESSAGES);
+        for (int i = from; i < chatHistory.size(); i++) {
+            Map<String, Object> turn = chatHistory.get(i);
+            if (turn == null) {
+                continue;
+            }
+            Object roleObj = turn.get("role");
+            Object contentObj = turn.get("content");
+            if (roleObj == null || contentObj == null) {
+                continue;
+            }
+            String role = String.valueOf(roleObj).trim().toLowerCase(Locale.ROOT);
+            if (!"user".equals(role) && !"assistant".equals(role)) {
+                continue;
+            }
+            String content = String.valueOf(contentObj).trim();
+            if (!StringUtils.hasText(content)) {
+                continue;
+            }
+            if (content.length() > MAX_HISTORY_CONTENT_CHARS) {
+                content = content.substring(0, MAX_HISTORY_CONTENT_CHARS) + "…";
+            }
+            messages.add(new JSONObject().put("role", role).put("content", content));
+        }
+    }
     
     /**
      * 调用通义千问 API（支持 Function Calling）
@@ -252,8 +380,8 @@ public class AgentService {
         payload.put("input", input);
         
         JSONObject parameters = new JSONObject();
-        parameters.put("temperature", 0.85);  // 提高创造性和分析能力（从 0.7 提升到 0.85）
-        parameters.put("top_p", 0.92);        // 增加多样性（从 0.9 提升到 0.92）
+        parameters.put("temperature", agentTemperature);
+        parameters.put("top_p", agentTopP);
         parameters.put("result_format", "message");
         payload.put("parameters", parameters);
         
@@ -375,7 +503,7 @@ public class AgentService {
      * 获取所有农田数据
      */
     private String getAllFarmsData() {
-        List<Statistic> farms = statisticService.list();
+        List<Statistic> farms = listFarmsOrEmpty();
         JSONArray result = new JSONArray();
         for (Statistic farm : farms) {
             result.add(farmToJson(farm));
@@ -387,7 +515,7 @@ public class AgentService {
      * 获取指定农田详情
      */
     private String getFarmDetail(String farmName) {
-        List<Statistic> farms = statisticService.list();
+        List<Statistic> farms = listFarmsOrEmpty();
         for (Statistic farm : farms) {
             if (farm.getFarm() != null && farm.getFarm().contains(farmName)) {
                 return farmToJson(farm).toString();
@@ -400,7 +528,7 @@ public class AgentService {
      * 获取需要灌溉的农田（土壤湿度低于阈值）
      */
     private String getFarmsNeedIrrigation(int threshold) {
-        List<Statistic> farms = statisticService.list();
+        List<Statistic> farms = listFarmsOrEmpty();
         JSONArray result = new JSONArray();
         for (Statistic farm : farms) {
             Integer soilHumidity = farm.getSoilhumidity();
@@ -449,7 +577,7 @@ public class AgentService {
         }
         
         // 从数据库获取各农田的环境数据
-        List<Statistic> farms = statisticService.list();
+        List<Statistic> farms = listFarmsOrEmpty();
         JSONArray farmEnvs = new JSONArray();
         for (Statistic farm : farms) {
             JSONObject env = new JSONObject();
@@ -688,9 +816,10 @@ public class AgentService {
     /**
      * 构建系统提示词 - 增强经营分析框架 v2.0
      */
-    private String buildSystemPrompt() {
-        return "你是一个智能农业 AI Agent，具有数据分析和自主执行能力。\n\n" +
+    private String buildSystemPrompt(String memorySnippet) {
+        String base = "你是一个智能农业 AI Agent，具有数据分析和自主执行能力。\n\n" +
                "【核心原则 - 必须遵守！】\n" +
+               "0. 紧扣用户本轮问题作答，避免答非所问；若用户只是在问数值或情况，优先用工具取数后在 advice 中说明。\n" +
                "1. 禁止使用 navigate 跳转页面！用户问数据问题时，必须调用工具获取数据并在 advice 中回答\n" +
                "2. 🎯 理解用户真实意图：\n" +
                "   - \"农田环境怎么样\" = 调用 get_all_farms 查询数据\n" +
@@ -728,6 +857,9 @@ public class AgentService {
                "用户说：\"打开环境监测页面\"\n" +
                "正确：返回 navigate 跳转\n" +
                "错误：调用 get_environment_data\n\n" +
+               "用户说：\"你能做什么\" / \"你可以做什么\"\n" +
+               "正确：在 advice 中直接列出助手能力（查田、浇水、经营、跳转等），不要返回无法理解、不要只给空 actions\n" +
+               "错误：说没听懂或让用户换一个问题\n\n" +
                "【自动执行规则】\n" +
                "1. 环境异常 → 自动控制设备\n" +
                "   - 土壤湿度 < 30% → control_irrigation(action='on')\n" +
@@ -752,6 +884,11 @@ public class AgentService {
                "- 有什么问题/需要注意什么 → 调用 get_comprehensive_report 列出问题清单\n\n" +
 
                "【分析框架】环境健康→资金健康→库存健康→运营健康→风险预警";
+
+        if (StringUtils.hasText(memorySnippet)) {
+            return base + "\n\n【用户长期记忆（必须结合使用；若与本轮指令冲突，以本轮明确指令为准）】\n" + memorySnippet.trim();
+        }
+        return base;
     }
 
     /**
@@ -1235,8 +1372,30 @@ public class AgentService {
     }
 
     private AgentPlan parsePlan(String content) {
+        if (!StringUtils.hasText(content)) {
+            return null;
+        }
+        String base = cleanJsonContent(content.trim());
+        AgentPlan plan = parsePlanFromJsonString(base);
+        if (plan != null) {
+            return plan;
+        }
+        int i = base.indexOf('{');
+        int j = base.lastIndexOf('}');
+        if (i >= 0 && j > i) {
+            plan = parsePlanFromJsonString(base.substring(i, j + 1));
+            if (plan != null) {
+                return plan;
+            }
+        }
+        log.warn("解析 Agent 计划失败（整段与截取均无效）: {}",
+                base.length() > 600 ? base.substring(0, 600) + "…" : base);
+        return null;
+    }
+
+    private AgentPlan parsePlanFromJsonString(String json) {
         try {
-            JSONObject obj = JSONUtil.parseObj(content);
+            JSONObject obj = JSONUtil.parseObj(json);
             AgentPlan plan = new AgentPlan();
             plan.setAdvice(obj.getStr("advice", "好的，我来帮您处理。"));
 
@@ -1245,6 +1404,9 @@ public class AgentService {
             if (arr != null) {
                 for (int i = 0; i < arr.size(); i++) {
                     JSONObject item = arr.getJSONObject(i);
+                    if (item == null) {
+                        continue;
+                    }
                     AgentAction action = new AgentAction();
                     action.setId(item.getStr("id", "action-" + i));
                     action.setType(item.getStr("type"));
@@ -1254,10 +1416,14 @@ public class AgentService {
                     action.setTarget(item.getStr("target", null));
                     action.setRiskLevel(item.getStr("riskLevel", "medium"));
                     if (item.containsKey("params")) {
-                        action.setParams(item.getJSONObject("params"));
+                        JSONObject p = item.getJSONObject("params");
+                        if (p != null && !p.isEmpty()) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> pm = JSONUtil.toBean(p, Map.class);
+                            action.setParams(pm != null ? new HashMap<>(pm) : new HashMap<>());
+                        }
                     }
 
-                    // 白名单校验
                     if (isAllowedType(action.getType())) {
                         actions.add(action);
                     } else {
@@ -1268,7 +1434,6 @@ public class AgentService {
             plan.setActions(actions);
             return plan;
         } catch (Exception e) {
-            log.error("解析 Agent 计划失败: {}", content, e);
             return null;
         }
     }
@@ -1279,16 +1444,123 @@ public class AgentService {
                 .contains(type);
     }
 
-    private AgentPlan fallbackPlan(String userQuestion) {
+    /**
+     * 判断用户是否在问「环境/土壤湿度等数值」，以便与兜底逻辑里「含湿度就跳转大屏」区分。
+     */
+    private static boolean isEnvOrSoilDataQuestion(String lower) {
+        if (lower == null || lower.isEmpty()) {
+            return false;
+        }
+        if (lower.contains("土壤湿度") || lower.contains("墒情")) {
+            return true;
+        }
+        if (lower.contains("湿度")
+                && (lower.contains("怎么样") || lower.contains("多少") || lower.contains("如何")
+                || lower.contains("看下") || lower.contains("看看") || lower.contains("查看") || lower.contains("查询"))) {
+            return true;
+        }
+        if ((lower.contains("环境") || lower.contains("监测"))
+                && (lower.contains("怎么样") || lower.contains("如何") || lower.contains("多少") || lower.contains("情况"))) {
+            return true;
+        }
+        if ((lower.contains("看看") || lower.contains("去看")) && (lower.contains("湿度") || lower.contains("温度")
+                || lower.contains("光照") || lower.contains("墒情") || lower.contains("土壤"))) {
+            if (!lower.contains("大屏") && !lower.contains("打开页面")) {
+                return true;
+            }
+        }
+        boolean hasFarmOrdinal = java.util.regex.Pattern.compile("[0-9一二三四五六七八九十]+\\s*号").matcher(lower).find();
+        if (hasFarmOrdinal && (lower.contains("湿度") || lower.contains("温度") || lower.contains("光照"))) {
+            return !lower.contains("打开") && !lower.contains("跳转") && !lower.contains("进入");
+        }
+        return false;
+    }
+
+    /**
+     * 用户问「你能做什么」等元问题，应与具体农事指令区分，避免落入末尾「没听懂」话术。
+     */
+    private static boolean isCapabilityQuestion(String lower, String raw) {
+        if (lower == null || lower.isEmpty()) {
+            return false;
+        }
+        if (lower.contains("你可以做什么") || lower.contains("你能做什么") || lower.contains("你会做什么")
+                || lower.contains("你能干什么") || lower.contains("你能干嘛") || lower.contains("你会干啥")
+                || lower.contains("你会干嘛") || lower.contains("你可以干嘛") || lower.contains("你可以干啥")
+                || lower.contains("有什么功能") || lower.contains("哪些功能") || lower.contains("功能有哪些")
+                || lower.contains("能帮我什么") || lower.contains("可以帮我什么") || lower.contains("会帮我什么")
+                || lower.contains("自我介绍") || lower.contains("介绍你的功能") || lower.contains("你有什么用")
+                || lower.contains("使用说明") || lower.contains("怎么用你") || lower.contains("怎么用助手")
+                || lower.contains("你会哪些") || lower.contains("你可以哪些") || lower.contains("你能哪些")) {
+            return true;
+        }
+        String trimmed = raw.trim();
+        if (java.util.regex.Pattern.compile("^(你可以|你能|你会)(做|干|弄)?(什么|啥)[吧吗呀呢啊？?！!。.\\s]*$")
+                .matcher(trimmed).matches()) {
+            return true;
+        }
+        return false;
+    }
+
+    private static String buildCapabilityIntro() {
+        return "我是您的智能农情助手，可以帮您做这些事：\n\n"
+                + "• 农田与环境：查各块地的土壤湿度、温度、光照；哪块地偏干需要浇水；环境概况一句话总结。\n"
+                + "• 设备与作业：按田号开启/关闭灌溉、补光灯；飞防消杀（无人机打药）等（会生成可确认的操作按钮）。\n"
+                + "• 经营与物资：销售收入、采购、库存、利润与健康度等经营数据查询与分析。\n"
+                + "• 页面跳转：说「打开××页面」「带我去××」可跳转到地图、果蔬检测、大屏、库存等对应界面。\n\n"
+                + "您可以直接用自然话提问，例如：「哪块地需要浇水」「今年经营怎么样」「帮我给2号田浇水」「打开农田地图」。";
+    }
+
+    private AgentPlan fallbackPlan(Integer userId, String userQuestion) {
         AgentPlan plan = new AgentPlan();
         List<AgentAction> actions = new ArrayList<>();
 
-        String lower = userQuestion.toLowerCase(Locale.ROOT);
-        
+        if (userQuestion == null || !StringUtils.hasText(userQuestion.trim())) {
+            plan.setAdvice("请输入问题或指令。");
+            plan.setActions(actions);
+            return plan;
+        }
+
+        String raw = userQuestion.trim();
+        String lower = raw.toLowerCase(Locale.ROOT);
+
+        // 身份 / 模型类问题：兜底规则也能明确回答（与是否走通义无关，避免固定「没听懂」话术）
+        if (raw.contains("什么模型") || raw.contains("你是谁") || raw.contains("哪个模型")
+                || (raw.contains("你") && raw.contains("模型")) || lower.contains("qwen")) {
+            plan.setAdvice("我是「禾序」智能农业研判助手。对话与推理由阿里通义千问（DashScope，配置项 qwen.model，默认 qwen-max）驱动，"
+                    + "并会按需调用您系统里的农田、库存、经营等工具做分析；我本身不是独立聊天 App，更偏向「问农事、给方案、可执行时出动作」。");
+            plan.setActions(actions);
+            return plan;
+        }
+
+        if (isCapabilityQuestion(lower, raw)) {
+            plan.setAdvice(buildCapabilityIntro());
+            plan.setActions(actions);
+            return plan;
+        }
+
+        AgentPlan explicitMemory = tryPersistExplicitMemoryPreference(userId, raw);
+        if (explicitMemory != null) {
+            return explicitMemory;
+        }
+
+        // 模糊「农事/种植建议」：兜底时结合已写入的偏好，避免只剩「没听懂」
+        if (isVagueFarmingAdviceQuestion(lower)) {
+            plan.setAdvice(buildVagueFarmingAdvice(userId));
+            if (userId != null && agentUserMemoryService != null) {
+                try {
+                    agentUserMemoryService.appendConversationTurn(userId, raw, plan.getAdvice());
+                } catch (Exception e) {
+                    log.warn("农事建议兜底写入对话记忆失败: {}", e.getMessage());
+                }
+            }
+            plan.setActions(actions);
+            return plan;
+        }
+
         // 优先匹配：指定田地的操作（灌溉、飞防消杀等）
         String targetFarmName = extractFarmName(userQuestion);
         if (targetFarmName != null) {
-            List<Statistic> farms = statisticService.list();
+            List<Statistic> farms = listFarmsOrEmpty();
             Statistic targetFarm = null;
             
             for (Statistic farm : farms) {
@@ -1372,6 +1644,31 @@ public class AgentService {
                     plan.setActions(actions);
                     return plan;
                 }
+
+                // 查询某块田的土壤湿度 / 环境数据（避免误命中下方「湿度→跳转大屏」兜底）
+                if (isEnvOrSoilDataQuestion(lower)
+                        && !lower.contains("浇水") && !lower.contains("灌溉") && !lower.contains("浇地")
+                        && !lower.contains("飞防") && !lower.contains("消杀") && !lower.contains("打药")) {
+                    StringBuilder advice = new StringBuilder();
+                    advice.append("【").append(targetFarm.getFarm()).append("】当前数据（系统农田统计）：\n\n");
+                    if (targetFarm.getSoilhumidity() != null) {
+                        advice.append("• 土壤湿度：").append(targetFarm.getSoilhumidity()).append("%");
+                        int h = targetFarm.getSoilhumidity();
+                        advice.append(h < 30 ? "（低于常见灌溉阈值 30%，偏干）\n" : "（在常见阈值 30% 以上）\n");
+                    } else {
+                        advice.append("• 土壤湿度：暂无数据\n");
+                    }
+                    if (targetFarm.getTemperature() != null) {
+                        advice.append("• 温度：").append(targetFarm.getTemperature()).append("℃\n");
+                    }
+                    if (StringUtils.hasText(targetFarm.getCrop())) {
+                        advice.append("• 作物：").append(targetFarm.getCrop()).append("\n");
+                    }
+                    advice.append("\n说明：以上为业务库中的快照。若需看实时传感器曲线，可从侧栏进入「环境监测 / Aether」页面。");
+                    plan.setAdvice(advice.toString());
+                    plan.setActions(actions);
+                    return plan;
+                }
             }
         }
         
@@ -1380,7 +1677,7 @@ public class AgentService {
              lower.contains("缺水") || lower.contains("干旱")) ||
             ((lower.contains("浇水") || lower.contains("灌溉")) && (lower.contains("哪") || lower.contains("有没有") || lower.contains("看看")))) {
             
-            List<Statistic> farms = statisticService.list();
+            List<Statistic> farms = listFarmsOrEmpty();
             List<Statistic> needWater = farms.stream()
                 .filter(f -> f.getSoilhumidity() != null && f.getSoilhumidity() < 30)
                 .collect(Collectors.toList());
@@ -1463,9 +1760,10 @@ public class AgentService {
             return plan;
         }
         
-        // 优先匹配：导航意图（带我去、打开、看看 + 页面名称）
-        if (lower.contains("带我") || lower.contains("打开") || lower.contains("跳转") || 
-            lower.contains("进入") || lower.contains("去") || lower.contains("看看") || lower.contains("查看")) {
+        // 优先匹配：导航意图（带我去、打开、跳转等；排除「问湿度/温度数值」以免误跳大屏）
+        if (!isEnvOrSoilDataQuestion(lower) && (lower.contains("带我") || lower.contains("打开") || lower.contains("跳转")
+                || lower.contains("进入") || lower.contains("带我去") || lower.contains("去打开") || lower.contains("去进入")
+                || lower.contains("看看") || lower.contains("查看"))) {
             
             String route = null;
             String title = null;
@@ -1511,8 +1809,10 @@ public class AgentService {
                 route = "/inventory";
                 title = "库存管理";
             }
-            // 果蔬识别
-            else if (lower.contains("识别") || lower.contains("果蔬") || lower.contains("检测")) {
+            // 果蔬识别（收窄：避免单字「检测」误伤其它问句）
+            else if ((lower.contains("识别") || lower.contains("检测"))
+                    && (lower.contains("果蔬") || lower.contains("水果") || lower.contains("蔬菜")
+                    || lower.contains("病虫害") || lower.contains("病害") || lower.contains("害虫"))) {
                 route = "/fruit-detect";
                 title = "果蔬识别";
             }
@@ -1536,7 +1836,7 @@ public class AgentService {
         
         // 优先匹配：简单问候语
         if (lower.matches("^(你好|您好|hi|hello|嗨|哈喽|早上好|下午好|晚上好|早安|晚安|在吗|在不在|你在吗)[!！。？?]*$")) {
-            List<Statistic> farms = statisticService.list();
+            List<Statistic> farms = listFarmsOrEmpty();
             StringBuilder greeting = new StringBuilder();
             greeting.append("你好！我是您的智能农情助手。\n\n");
             greeting.append("目前系统共管理 ").append(farms.size()).append(" 块农田。\n\n");
@@ -1560,7 +1860,7 @@ public class AgentService {
             (lower.contains("什么") || lower.contains("哪些") || lower.contains("多少") || lower.contains("最多") || 
              lower.contains("统计") || lower.contains("看看") || lower.contains("查看"))) {
             
-            List<Statistic> farms = statisticService.list();
+            List<Statistic> farms = listFarmsOrEmpty();
             Map<String, Integer> cropCount = new LinkedHashMap<>();
             
             for (Statistic farm : farms) {
@@ -1613,7 +1913,7 @@ public class AgentService {
             (lower.contains("多少") || lower.contains("几块") || lower.contains("情况") || lower.contains("概况") || 
              lower.contains("统计") || lower.contains("看看") || lower.contains("有哪些"))) {
             
-            List<Statistic> farms = statisticService.list();
+            List<Statistic> farms = listFarmsOrEmpty();
             
             // 计算总面积
             double totalArea = farms.stream()
@@ -1680,7 +1980,7 @@ public class AgentService {
             (lower.contains("农田") || lower.contains("土地") || lower.contains("田地") || lower.contains("地块"))) {
             
             String targetFarm = extractFarmName(userQuestion);
-            List<Statistic> farms = statisticService.list();
+            List<Statistic> farms = listFarmsOrEmpty();
             
             if (targetFarm != null) {
                 Statistic matchedFarm = null;
@@ -1776,7 +2076,7 @@ public class AgentService {
             String crop = extractCropName(userQuestion);
             
             // 获取当前环境数据
-            List<Statistic> farms = statisticService.list();
+            List<Statistic> farms = listFarmsOrEmpty();
             if (!farms.isEmpty()) {
                 // 计算平均温度和湿度
                 double avgTemp = farms.stream()
@@ -1873,7 +2173,7 @@ public class AgentService {
         // 农田数量查询（避免与上面的利润查询冲突）
         if ((lower.contains("几块") || lower.contains("有哪些")) && (lower.contains("农场") || lower.contains("农田"))) {
             // 查询数据库获取农田信息
-            List<Statistic> farms = statisticService.list();
+            List<Statistic> farms = listFarmsOrEmpty();
             if (farms != null && !farms.isEmpty()) {
                 StringBuilder advice = new StringBuilder();
                 advice.append("根据系统数据，您目前共有 ").append(farms.size()).append(" 块农田：\n\n");
@@ -1903,7 +2203,7 @@ public class AgentService {
         
         // 查询需要浇水的农田
         if (lower.contains("需要浇水") || lower.contains("需要灌溉") || lower.contains("哪些") && (lower.contains("浇水") || lower.contains("灌溉"))) {
-            List<Statistic> farms = statisticService.list();
+            List<Statistic> farms = listFarmsOrEmpty();
             List<Statistic> needWater = farms.stream()
                 .filter(f -> f.getSoilhumidity() != null && f.getSoilhumidity() < 30)
                 .collect(Collectors.toList());
@@ -1927,7 +2227,7 @@ public class AgentService {
         
         // 查询缺水/灌溉相关
         if (lower.contains("缺水") || lower.contains("干旱")) {
-            List<Statistic> farms = statisticService.list();
+            List<Statistic> farms = listFarmsOrEmpty();
             List<Statistic> needWater = farms.stream()
                 .filter(f -> f.getSoilhumidity() != null && f.getSoilhumidity() < 30)
                 .collect(Collectors.toList());
@@ -1963,7 +2263,7 @@ public class AgentService {
             
             // 尝试提取农田名称（支持多种格式：二号田、2号田、田地2、农田二等）
             String targetFarm = extractFarmName(userQuestion);
-            List<Statistic> farms = statisticService.list();
+            List<Statistic> farms = listFarmsOrEmpty();
             
             if (targetFarm != null) {
                 // 查找匹配的农田
@@ -2025,6 +2325,30 @@ public class AgentService {
                 } else {
                     plan.setAdvice("所有农田湿度正常，暂时不需要浇水。\n如需强制浇水，请指定农田名称，如：帮我给1号田浇水");
                 }
+                plan.setActions(actions);
+                return plan;
+            }
+        }
+
+        // 未指定田号，但明显在问环境/土壤湿度数值（不要跳转大屏）
+        if (isEnvOrSoilDataQuestion(lower)) {
+            List<Statistic> farms = listFarmsOrEmpty();
+            if (farms != null && !farms.isEmpty()) {
+                StringBuilder advice = new StringBuilder();
+                advice.append("各农田土壤湿度一览（系统统计）：\n\n");
+                int n = Math.min(12, farms.size());
+                for (int i = 0; i < n; i++) {
+                    Statistic f = farms.get(i);
+                    advice.append("• ").append(f.getFarm() != null ? f.getFarm() : ("ID " + f.getId()));
+                    advice.append("：土壤湿度 ");
+                    advice.append(f.getSoilhumidity() != null ? f.getSoilhumidity() + "%" : "暂无");
+                    advice.append("\n");
+                }
+                if (farms.size() > n) {
+                    advice.append("\n… 共 ").append(farms.size()).append(" 块田，此处列出前 ").append(n).append(" 条。\n");
+                }
+                advice.append("\n可再问：「3号田土壤湿度怎么样」查看单块地详情。");
+                plan.setAdvice(advice.toString());
                 plan.setActions(actions);
                 return plan;
             }
@@ -2107,7 +2431,7 @@ public class AgentService {
             nav.setRoute("/sales");
             nav.setRiskLevel("low");
             actions.add(nav);
-        } else if (lower.contains("经营") || lower.contains("分析") || lower.contains("效益")) {
+        } else if (isBusinessAnalysisPageNavigation(lower)) {
             plan.setAdvice("好的，为您打开经营分析页面。");
             AgentAction nav = new AgentAction();
             nav.setId("navigate_analysis");
@@ -2137,7 +2461,8 @@ public class AgentService {
             nav.setRoute("/bigscreen");
             nav.setRiskLevel("low");
             actions.add(nav);
-        } else if (lower.contains("监测") || lower.contains("环境") || lower.contains("温度") || lower.contains("湿度")) {
+        } else if (!isEnvOrSoilDataQuestion(lower)
+                && (lower.contains("监测") || lower.contains("环境") || lower.contains("温度") || lower.contains("湿度"))) {
             plan.setAdvice("好的，为您打开环境监测大屏。");
             AgentAction nav = new AgentAction();
             nav.setId("navigate_dashbord");
@@ -2168,7 +2493,16 @@ public class AgentService {
             nav.setRiskLevel("low");
             actions.add(nav);
         }
-        if (actions.isEmpty()) {
+        if (actions.isEmpty() && isVagueFarmingAdviceQuestion(lower)) {
+            plan.setAdvice(buildVagueFarmingAdvice(userId));
+            if (userId != null && agentUserMemoryService != null) {
+                try {
+                    agentUserMemoryService.appendConversationTurn(userId, raw, plan.getAdvice());
+                } catch (Exception e) {
+                    log.warn("农事建议兜底（末段）写入对话记忆失败: {}", e.getMessage());
+                }
+            }
+        } else if (actions.isEmpty()) {
             plan.setAdvice("不好意思，我没太明白您的意思。您可以问我：\n• 哪块地需要浇水\n• 今年赚了多少钱\n• 帮我给X号田浇水\n• 打开XX页面");
         }
 
@@ -2224,7 +2558,7 @@ public class AgentService {
             // 农田统计
             int totalFarms = 0;
             if (statisticService != null) {
-                totalFarms = statisticService.list().size();
+                totalFarms = listFarmsOrEmpty().size();
             }
             
             // 用户统计
@@ -2436,7 +2770,7 @@ public class AgentService {
             int totalFarms = 0;
             
             if (statisticService != null) {
-                List<Statistic> farms = statisticService.list();
+                List<Statistic> farms = listFarmsOrEmpty();
                 totalFarms = farms.size();
                 for (Statistic farm : farms) {
                     if (farm.getSoilhumidity() != null && farm.getSoilhumidity() < 30) abnormalFarms++;
@@ -2675,7 +3009,7 @@ public class AgentService {
         }
         
         // 生成默认名称
-        List<Statistic> farms = statisticService.list();
+        List<Statistic> farms = listFarmsOrEmpty();
         int nextNum = farms.size() + 1;
         return nextNum + "号田";
     }
@@ -3212,6 +3546,215 @@ public class AgentService {
             log.error("AI Agent 发送通知失败", e);
         }
         return result.toString();
+    }
+
+    /**
+     * 是否应跳转「经营分析」页面：避免「经营上的农事建议」等因含「经营」误跳页。
+     */
+    private static boolean isBusinessAnalysisPageNavigation(String lower) {
+        if (!StringUtils.hasText(lower)) {
+            return false;
+        }
+        if ((lower.contains("农事") || lower.contains("种植") || lower.contains("栽培")) && lower.contains("建议")) {
+            return false;
+        }
+        if (lower.contains("经营分析") || lower.contains("效益分析") || lower.contains("经营报表")
+                || lower.contains("经营效益") || lower.contains("效益报表")) {
+            return true;
+        }
+        if ((lower.contains("打开") || lower.contains("跳转") || lower.contains("进入") || lower.contains("看看") || lower.contains("查看"))
+                && (lower.contains("经营分析") || (lower.contains("经营") && lower.contains("分析")))) {
+            return true;
+        }
+        if (lower.contains("分析") && (lower.contains("经营") || lower.contains("效益") || lower.contains("销售") || lower.contains("利润"))) {
+            return true;
+        }
+        if (lower.contains("效益") && (lower.contains("怎么样") || lower.contains("如何") || lower.contains("报表") || lower.contains("分析"))) {
+            return true;
+        }
+        if (lower.contains("经营") && (lower.contains("页面") || lower.contains("大屏") || lower.contains("看板"))) {
+            return true;
+        }
+        return false;
+    }
+
+    /** 兜底：用户是否在要泛化的农事/种植建议（非具体设备页跳转） */
+    private static boolean isVagueFarmingAdviceQuestion(String lower) {
+        if (!StringUtils.hasText(lower)) {
+            return false;
+        }
+        if (lower.contains("农事建议") || lower.contains("种植建议") || lower.contains("栽培建议") || lower.contains("生产建议")) {
+            return true;
+        }
+        if (lower.contains("建议") && (lower.contains("农事") || lower.contains("种植") || lower.contains("田里")
+                || lower.contains("大棚") || lower.contains("作物"))) {
+            return true;
+        }
+        if ((lower.contains("给我") || lower.contains("给点") || lower.contains("给些") || lower.contains("想要") || lower.contains("想听"))
+                && lower.contains("建议")
+                && (lower.contains("农") || lower.contains("种") || lower.contains("田") || lower.contains("棚"))) {
+            return true;
+        }
+        if ((lower.contains("指点") || lower.contains("支招") || lower.contains("支个招"))
+                && (lower.contains("种") || lower.contains("田") || lower.contains("棚") || lower.contains("农"))) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 兜底路径下给出可读农事要点；若已有偏好（如番茄），文案向其靠拢。
+     */
+    private String buildVagueFarmingAdvice(Integer userId) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("可以，先给您几条马上能对照执行的农事思路（具体仍以您田里传感器与当地规程为准）：\n\n");
+        String prefs = null;
+        if (userId != null && agentUserMemoryService != null) {
+            try {
+                AgentUserMemory m = agentUserMemoryService.getOrCreate(userId);
+                if (m != null && StringUtils.hasText(m.getPreferences())) {
+                    prefs = m.getPreferences().trim();
+                }
+            } catch (Exception e) {
+                log.debug("读取偏好用于农事建议兜底: {}", e.getMessage());
+            }
+        }
+        if (StringUtils.hasText(prefs)) {
+            String show = prefs.length() > 500 ? prefs.substring(prefs.length() - 500) : prefs;
+            sb.append("【结合您在「记忆」里保存的偏好】\n");
+            sb.append(show).append("\n\n");
+        }
+        boolean tomato = prefs != null && (prefs.contains("番茄") || prefs.contains("西红柿"));
+        if (tomato) {
+            sb.append("结合您偏好的番茄，近期可重点留意：\n");
+            sb.append("• 花果期：控氮肥防徒长；坐果期补钙硼，减少裂果与脐腐风险。\n");
+            sb.append("• 水肥：小水勤浇，忌长期积水闷根；晴天中午短时通风降湿。\n");
+            sb.append("• 病虫害：早防早治，重点巡叶背粉虱/潜叶蝇与早疫病斑。\n");
+        } else {
+            sb.append("通用设施蔬菜方向：\n");
+            sb.append("• 先看土壤湿度与天气预报再浇水，阴雨天适当控水。\n");
+            sb.append("• 追肥少量多次，避免一次重肥烧苗。\n");
+            sb.append("• 棚室注意通风与温差，防高湿诱发病害。\n");
+        }
+        try {
+            List<Statistic> farms = listFarmsOrEmpty();
+            if (!farms.isEmpty()) {
+                sb.append("\n您系统里已登记的田块：");
+                int n = Math.min(5, farms.size());
+                for (int i = 0; i < n; i++) {
+                    Statistic f = farms.get(i);
+                    if (f.getFarm() != null) {
+                        sb.append("\n• ").append(f.getFarm());
+                        if (StringUtils.hasText(f.getCrop())) {
+                            sb.append("（").append(f.getCrop()).append("）");
+                        }
+                    }
+                }
+                if (farms.size() > n) {
+                    sb.append("\n…等共 ").append(farms.size()).append(" 块，可再说田号我按地块细写。");
+                } else {
+                    sb.append("\n如需按某一块田写得更细，请直接说田号或名称。");
+                }
+            }
+        } catch (Exception ignored) {
+            sb.append("\n如需按某一块田写得更细，请直接说田号或名称。");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 用户显式要求写入长期偏好时立即落库并返回固定应答；否则返回 null。
+     * 在通义调用前与兜底路径中共用，保证「请记住 / 备注一下」等说法一定写库。
+     */
+    private AgentPlan tryPersistExplicitMemoryPreference(Integer userId, String userQuestion) {
+        if (!StringUtils.hasText(userQuestion)) {
+            return null;
+        }
+        String raw = userQuestion.trim();
+        String lower = raw.toLowerCase(Locale.ROOT);
+        if (!isExplicitMemoryPreferenceRequest(raw, lower)) {
+            return null;
+        }
+        AgentPlan plan = new AgentPlan();
+        plan.setActions(new ArrayList<>());
+        // 未登录时无法绑定 userId，原先直接 return null 会掉进通义/兜底「没听懂」
+        if (userId == null) {
+            plan.setAdvice("已识别您是在补充长期偏好，但当前未登录，偏好无法写入您的账号。请先登录后再发同样内容；登录后也可在「记忆」面板里手动添加。");
+            return plan;
+        }
+        if (agentUserMemoryService == null) {
+            plan.setAdvice("已识别为偏好备注，但记忆服务未启用，暂时无法落库。请联系管理员检查配置。");
+            return plan;
+        }
+        try {
+            String note = extractMemoryPreferenceNote(raw);
+            if (StringUtils.hasText(note)) {
+                agentUserMemoryService.appendPreferenceNote(userId, note);
+                plan.setAdvice("好的，我已经把这条偏好记进数据库了。之后生成方案、回答农事时会结合这条记录。你也可以点「记忆」查看或清空。");
+            } else {
+                plan.setAdvice("想让我记住的内容不太明确。可以说完整些，例如：「请记住：我主要种番茄」或「备注一下：我关心番茄整枝」。也可在「记忆」面板里点「记入上一句」。");
+            }
+            return plan;
+        } catch (Exception e) {
+            log.warn("显式偏好写入失败（将改走其它逻辑）: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 兜底规则：用户是否在显式要求写入长期偏好 */
+    private static boolean isExplicitMemoryPreferenceRequest(String raw, String lower) {
+        if (!StringUtils.hasText(raw)) {
+            return false;
+        }
+        if (raw.contains("请记住") || raw.contains("请你记住") || raw.contains("请帮我记住")
+                || raw.contains("帮我记住") || raw.contains("不要忘记") || raw.contains("记下来")) {
+            return true;
+        }
+        if (raw.contains("备注一下") || raw.contains("帮我备注") || raw.contains("记个备注") || raw.contains("加条备注")) {
+            return true;
+        }
+        if (raw.startsWith("备注：") || raw.startsWith("备注:") || raw.startsWith("备忘：") || raw.startsWith("备忘:")) {
+            return true;
+        }
+        if (raw.startsWith("请备注") || raw.contains("请备注：") || raw.contains("请备注:")) {
+            return true;
+        }
+        if (raw.contains("记住")) {
+            return raw.contains("以后") || raw.contains("优先") || raw.contains("默认") || raw.contains("主要")
+                    || raw.contains("长期") || lower.contains("remember");
+        }
+        return false;
+    }
+
+    /** 去掉「请记住」等前缀，得到要写入 preferences 的正文 */
+    private static String extractMemoryPreferenceNote(String raw) {
+        String s = raw.trim();
+        String[] prefixes = {
+                "请你记住", "请帮我记住", "请备注：", "请备注:",
+                "请记住", "备注一下", "帮我备注", "记个备注", "加条备注",
+                "帮我记住", "不要忘记", "记下来：", "记下来，", "记下来",
+                "备注：", "备注:", "备忘：", "备忘:", "请备注"
+        };
+        for (String p : prefixes) {
+            if (s.startsWith(p)) {
+                s = s.substring(p.length()).trim();
+                while (!s.isEmpty() && (s.startsWith("：") || s.startsWith(":") || s.startsWith("，") || s.startsWith(","))) {
+                    s = s.substring(1).trim();
+                }
+                return s;
+            }
+        }
+        int idx = s.indexOf("记住");
+        if (idx >= 0) {
+            String tail = s.substring(idx + "记住".length()).trim();
+            while (!tail.isEmpty() && (tail.startsWith("：") || tail.startsWith(":") || tail.startsWith("，") || tail.startsWith(","))) {
+                tail = tail.substring(1).trim();
+            }
+            if (StringUtils.hasText(tail)) {
+                return tail;
+            }
+        }
+        return s;
     }
 }
 

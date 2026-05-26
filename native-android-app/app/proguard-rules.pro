@@ -1,0 +1,4 @@
+-keepattributes Signature
+-keepattributes *Annotation*
+-keep class com.bangbangagro.app.api.** { *; }
+-keep class com.bangbangagro.app.data.** { *; }

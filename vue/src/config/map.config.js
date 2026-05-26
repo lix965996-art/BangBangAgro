@@ -6,12 +6,10 @@
 const mapConfig = {
   // 高德地图API配置
   amap: {
-    // JavaScript API Key（前端地图使用）
-    // 临时写死Key，等环境变量清理后恢复
-    jsKey: 'd806efe96e9b2c062cf900915936508f',
+    // JavaScript API Key（请通过 .env 的 VUE_APP_AMAP_JS_KEY 配置）
+    jsKey: '',
 
-    // 高德地图安全码（前端地图使用）
-    // 如果Key没有开启安全密钥，留空即可
+    // 高德地图安全码（请通过 .env 的 VUE_APP_AMAP_SECURITY_CODE 配置）
     securityCode: '',
     
     // API版本
@@ -35,6 +33,32 @@ const mapConfig = {
     
     // 默认缩放级别
     defaultZoom: 14
+  },
+
+  // 地图引擎策略：auto / amap / leaflet
+  provider: {
+    mode: 'auto'
+  },
+
+  // Leaflet 兼容地图瓦片源（按顺序回退）
+  leaflet: {
+    tileSources: [
+      {
+        name: 'Gaode Road',
+        url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+        options: { maxZoom: 18, subdomains: '1234', attribution: '&copy; AutoNavi' }
+      },
+      {
+        name: 'OpenStreetMap',
+        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        options: { maxZoom: 19, subdomains: 'abc', attribution: '&copy; OpenStreetMap' }
+      },
+      {
+        name: 'Carto Light',
+        url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+        options: { maxZoom: 19, subdomains: 'abcd', attribution: '&copy; CARTO &copy; OpenStreetMap' }
+      }
+    ]
   },
   
   // 区县映射配置

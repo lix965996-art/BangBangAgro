@@ -26,11 +26,23 @@ public class ChatController {
 
     @PostConstruct
     public void validateApiKey() {
-        if (qwenApiKey == null || qwenApiKey.trim().isEmpty()) {
-            log.error("QWEN_API_KEY environment variable is not set. The application cannot start without a valid API key.");
-            throw new IllegalStateException("QWEN_API_KEY must be set in environment variables");
+        String provider = qwenProxyProvider == null ? "" : qwenProxyProvider.trim().toLowerCase();
+        if ("deepseek".equals(provider)) {
+            if (deepseekApiKey == null || deepseekApiKey.trim().isEmpty()) {
+                log.error("qwen.proxy-provider=deepseek 但未配置 DEEPSEEK_API_KEY / deepseek.fallback-api-key");
+                throw new IllegalStateException("使用 DeepSeek 时请在 application-local.yml 配置 deepseek.fallback-api-key 或环境变量 DEEPSEEK_API_KEY");
+            }
+            log.info("qwen-proxy 使用 DeepSeek（OpenAI 兼容），前端路径仍为 /api/chat/qwen-proxy");
+            if (qwenApiKey == null || qwenApiKey.trim().isEmpty()) {
+                log.warn("qwen.api-key 为空：依赖 DashScope 的 /api/chat/ask 将返回未配置提示");
+            }
+        } else {
+            if (qwenApiKey == null || qwenApiKey.trim().isEmpty()) {
+                log.error("DashScope（通义）API Key 未配置，且 qwen.proxy-provider 非 deepseek");
+                throw new IllegalStateException("请配置 QWEN_API_KEY / qwen.fallback-api-key，或设置 qwen.proxy-provider=deepseek 并配置 DeepSeek Key");
+            }
+            log.info("通义千问（DashScope）API Key 已配置");
         }
-        log.info("QWEN_API_KEY is configured successfully");
 
         // 检查高德地图API密钥
         if ((webKey == null || webKey.trim().isEmpty()) && (jsKey == null || jsKey.trim().isEmpty())) {
@@ -62,14 +74,27 @@ public class ChatController {
     @Value("${amap.city:430800}")
     private String defaultCity;
 
-    @Value("${qwen.api-key}")
+    @Value("${qwen.api-key:}")
     private String qwenApiKey;
+
+    /** dashscope | deepseek：deepseek 时仅 /qwen-proxy 走 DeepSeek，不改前端 URL */
+    @Value("${qwen.proxy-provider:dashscope}")
+    private String qwenProxyProvider;
 
     @Value("${qwen.api-url:https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation}")
     private String qwenApiUrl;
 
     @Value("${qwen.model:qwen-max}")
     private String qwenModel;
+
+    @Value("${deepseek.api-key:}")
+    private String deepseekApiKey;
+
+    @Value("${deepseek.api-url:https://api.deepseek.com/v1/chat/completions}")
+    private String deepseekApiUrl;
+
+    @Value("${deepseek.model:deepseek-chat}")
+    private String deepseekModel;
 
     @PostMapping("/ask")
     public Map<String, Object> chatWithAI(@RequestBody Map<String, String> params) {
@@ -167,11 +192,62 @@ public class ChatController {
         }
 
         try {
-            // 构建通义千问请求格式
+            String provider = qwenProxyProvider == null ? "" : qwenProxyProvider.trim().toLowerCase();
+            String result;
+            JSONObject jsonResult;
+
+            if ("deepseek".equals(provider)) {
+                JSONObject payload = new JSONObject();
+                payload.set("model", deepseekModel);
+                JSONArray messages = new JSONArray();
+                JSONObject systemMsg = new JSONObject();
+                systemMsg.set("role", "system");
+                systemMsg.set("content", systemPrompt);
+                messages.add(systemMsg);
+                JSONObject userMsg = new JSONObject();
+                userMsg.set("role", "user");
+                userMsg.set("content", prompt);
+                messages.add(userMsg);
+                payload.set("messages", messages);
+                payload.set("temperature", 0.7);
+
+                result = HttpRequest.post(deepseekApiUrl)
+                        .header("Authorization", "Bearer " + deepseekApiKey.trim())
+                        .header("Content-Type", "application/json")
+                        .body(payload.toString())
+                        .timeout(120000)
+                        .execute()
+                        .body();
+
+                log.info("qwen-proxy(DeepSeek) 响应: {}", result);
+                jsonResult = JSONUtil.parseObj(result);
+
+                if (jsonResult.containsKey("error")) {
+                    JSONObject err = jsonResult.getJSONObject("error");
+                    String errorMsg = err != null ? err.getStr("message", "未知错误") : "未知错误";
+                    response.put("code", 500);
+                    response.put("message", "调用失败: " + errorMsg);
+                    response.put("data", null);
+                    return response;
+                }
+
+                String content = null;
+                if (jsonResult.containsKey("choices")) {
+                    JSONArray choices = jsonResult.getJSONArray("choices");
+                    if (choices != null && !choices.isEmpty()) {
+                        JSONObject choice0 = choices.getJSONObject(0);
+                        if (choice0 != null && choice0.containsKey("message")) {
+                            content = choice0.getJSONObject("message").getStr("content");
+                        }
+                    }
+                }
+                return buildProxySuccessResponse(response, content);
+            }
+
+            // DashScope（通义）请求格式
             JSONObject payload = new JSONObject();
             payload.set("model", qwenModel);
 
-            // 构建input
             JSONObject input = new JSONObject();
             JSONArray messages = new JSONArray();
             JSONObject systemMsg = new JSONObject();
@@ -187,14 +263,12 @@ public class ChatController {
             input.set("messages", messages);
             payload.set("input", input);
 
-            // 构建parameters
             JSONObject parameters = new JSONObject();
             parameters.set("temperature", 0.7);
             parameters.set("result_format", "message");
             payload.set("parameters", parameters);
 
-            // 发送请求
-            String result = HttpRequest.post(qwenApiUrl)
+            result = HttpRequest.post(qwenApiUrl)
                     .header("Authorization", "Bearer " + qwenApiKey)
                     .header("Content-Type", "application/json")
                     .body(payload.toString())
@@ -204,10 +278,8 @@ public class ChatController {
 
             log.info("通义千问代理响应: {}", result);
 
-            // 解析返回的 JSON 结果
-            JSONObject jsonResult = JSONUtil.parseObj(result);
+            jsonResult = JSONUtil.parseObj(result);
 
-            // 检查是否有错误信息
             if (jsonResult.containsKey("code") && !"200".equals(jsonResult.getStr("code"))) {
                 String errorMsg = jsonResult.getStr("message", "未知错误");
                 response.put("code", 500);
@@ -216,7 +288,6 @@ public class ChatController {
                 return response;
             }
 
-            // 提取 AI 回复的核心文本
             String content = null;
             if (jsonResult.containsKey("output")) {
                 JSONObject output = jsonResult.getJSONObject("output");
@@ -228,50 +299,51 @@ public class ChatController {
                                 .getStr("content");
                     }
                 }
-                // 兼容旧格式
                 if (content == null && output.containsKey("text")) {
                     content = output.getStr("text");
                 }
             }
 
-            if (content != null) {
-                // 清理markdown代码块标记
-                content = content.trim();
-                if (content.startsWith("```json")) {
-                    content = content.substring(7);
-                } else if (content.startsWith("```")) {
-                    content = content.substring(3);
-                }
-                if (content.endsWith("```")) {
-                    content = content.substring(0, content.length() - 3);
-                }
-                content = content.trim();
-
-                // 尝试解析为JSON
-                try {
-                    JSONObject jsonContent = JSONUtil.parseObj(content);
-                    response.put("code", 200);
-                    response.put("message", "success");
-                    response.put("data", jsonContent);
-                } catch (Exception e) {
-                    // 如果不是JSON，直接返回文本
-                    response.put("code", 200);
-                    response.put("message", "success");
-                    response.put("data", content);
-                }
-            } else {
-                response.put("code", 500);
-                response.put("message", "AI 未返回有效响应");
-                response.put("data", null);
-            }
-
+            return buildProxySuccessResponse(response, content);
         } catch (Exception e) {
-            log.error("通义千问代理调用异常", e);
+            log.error("qwen-proxy 调用异常", e);
             response.put("code", 500);
             response.put("message", "AI 服务调用异常: " + e.getMessage());
             response.put("data", null);
         }
 
+        return response;
+    }
+
+    /** 将模型返回的正文写入与原先一致的 code/message/data 结构 */
+    private Map<String, Object> buildProxySuccessResponse(Map<String, Object> response, String content) {
+        if (content != null) {
+            content = content.trim();
+            if (content.startsWith("```json")) {
+                content = content.substring(7);
+            } else if (content.startsWith("```")) {
+                content = content.substring(3);
+            }
+            if (content.endsWith("```")) {
+                content = content.substring(0, content.length() - 3);
+            }
+            content = content.trim();
+
+            try {
+                JSONObject jsonContent = JSONUtil.parseObj(content);
+                response.put("code", 200);
+                response.put("message", "success");
+                response.put("data", jsonContent);
+            } catch (Exception e) {
+                response.put("code", 200);
+                response.put("message", "success");
+                response.put("data", content);
+            }
+        } else {
+            response.put("code", 500);
+            response.put("message", "AI 未返回有效响应");
+            response.put("data", null);
+        }
         return response;
     }
 }

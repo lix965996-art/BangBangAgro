@@ -6,8 +6,12 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.util.UriComponentsBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -20,13 +24,21 @@ import java.util.Map;
 @RestController
 @RequestMapping("/amap")
 public class AmapProxyController {
+    private static final Logger log = LoggerFactory.getLogger(AmapProxyController.class);
     private static final ParameterizedTypeReference<Map<String, Object>> MAP_RESPONSE_TYPE =
             new ParameterizedTypeReference<Map<String, Object>>() {};
 
     @Value("${amap.web-key:}")
     private String webApiKey;
     
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
+
+    public AmapProxyController() {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(5000);
+        requestFactory.setReadTimeout(6000);
+        this.restTemplate = new RestTemplate(requestFactory);
+    }
     
     /**
      * 输入提示接口代理 - 根据输入关键字返回地点提示
@@ -78,6 +90,8 @@ public class AmapProxyController {
                     MAP_RESPONSE_TYPE
             );
             Map<String, Object> responseBody = response.getBody();
+            log.debug("[AMAP_PROXY][inputtips] keywords={}, city={}, status={}", keywords, city,
+                    responseBody != null ? responseBody.get("status") : "null");
 
             if (responseBody != null && "1".equals(String.valueOf(responseBody.get("status")))) {
                 // 成功返回
@@ -92,7 +106,13 @@ public class AmapProxyController {
                 result.put("tips", new ArrayList<>());
             }
 
+        } catch (ResourceAccessException e) {
+            log.warn("[AMAP_PROXY][inputtips] timeout or network error: {}", e.getMessage());
+            result.put("status", "0");
+            result.put("info", "高德服务连接超时，请稍后重试");
+            result.put("tips", new ArrayList<>());
         } catch (Exception e) {
+            log.error("[AMAP_PROXY][inputtips] unexpected error", e);
             result.put("status", "0");
             result.put("info", "服务器错误: " + e.getMessage());
             result.put("tips", new ArrayList<>());
@@ -138,6 +158,8 @@ public class AmapProxyController {
                     MAP_RESPONSE_TYPE
             );
             Map<String, Object> responseBody = response.getBody();
+            log.debug("[AMAP_PROXY][geocode] address={}, city={}, status={}", address, city,
+                    responseBody != null ? responseBody.get("status") : "null");
             
             if (responseBody != null && "1".equals(responseBody.get("status"))) {
                 return responseBody;
@@ -147,7 +169,14 @@ public class AmapProxyController {
                 errorResult.put("info", responseBody != null ? responseBody.get("info") : "调用失败");
                 return errorResult;
             }
+        } catch (ResourceAccessException e) {
+            log.warn("[AMAP_PROXY][geocode] timeout or network error: {}", e.getMessage());
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("status", "0");
+            errorResult.put("info", "高德服务连接超时，请稍后重试");
+            return errorResult;
         } catch (Exception e) {
+            log.error("[AMAP_PROXY][geocode] unexpected error", e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("status", "0");
             errorResult.put("info", "代理请求失败：" + e.getMessage());
@@ -190,6 +219,8 @@ public class AmapProxyController {
                     MAP_RESPONSE_TYPE
             );
             Map<String, Object> responseBody = response.getBody();
+            log.debug("[AMAP_PROXY][regeocode] location={}, extensions={}, status={}", location, extensions,
+                    responseBody != null ? responseBody.get("status") : "null");
             
             if (responseBody != null && "1".equals(responseBody.get("status"))) {
                 return responseBody;
@@ -199,7 +230,14 @@ public class AmapProxyController {
                 errorResult.put("info", responseBody != null ? responseBody.get("info") : "调用失败");
                 return errorResult;
             }
+        } catch (ResourceAccessException e) {
+            log.warn("[AMAP_PROXY][regeocode] timeout or network error: {}", e.getMessage());
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("status", "0");
+            errorResult.put("info", "高德服务连接超时，请稍后重试");
+            return errorResult;
         } catch (Exception e) {
+            log.error("[AMAP_PROXY][regeocode] unexpected error", e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("status", "0");
             errorResult.put("info", "代理请求失败：" + e.getMessage());

@@ -11,6 +11,9 @@ server:
 spring:
   application:
     name: smart-agriculture
+  # 若存在 classpath 下的 application-local.yml（已 .gitignore），则合并其中的配置（用于本机 API Key）
+  config:
+    import: optional:classpath:application-local.yml
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     # 云端部署时修改为实际数据库地址
@@ -75,17 +78,30 @@ files:
     max-size: 100MB
 
 # 高德地图API配置
+# web-key：控制台「后端 / Web服务」那条 Key，用于服务端代理；生产务必用环境变量 AMAP_WEB_KEY 覆盖
 amap:
   js-key: ${AMAP_JS_KEY:}
-  web-key: ${AMAP_WEB_KEY:}
+  web-key: ${AMAP_WEB_KEY:ebe7f5e599fde7c219bb00821b332e94}
   js-security-key: ${AMAP_JS_SECURITY_KEY:}
   city: ${AMAP_CITY:430800}
 
 # 通义千问AI配置（智能Agent）
+# api-key：优先环境变量 QWEN_API_KEY；未设置时用 qwen.fallback-api-key（见 optional 的 application-local.yml，已 .gitignore）
+# proxy-provider：dashscope（默认）| deepseek。为 deepseek 时，仅 /api/chat/qwen-proxy 走 DeepSeek（OpenAI 兼容），前端路径与文案可不变；/ask 仍用下方 qwen 调 DashScope。
+# 若本机仍报 Invalid API-key：在 Windows「环境变量」里删除空的或旧的 QWEN_API_KEY，或把它改成正确的 sk-
 qwen:
-  api-key: ${QWEN_API_KEY:}
+  api-key: ${QWEN_API_KEY:${qwen.fallback-api-key:}}
+  proxy-provider: ${QWEN_PROXY_PROVIDER:dashscope}
   api-url: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
   model: qwen-max
+  # Agent 计划生成：略低温度更贴指令、少胡跳页面；可用环境变量覆盖
+  agent-temperature: ${QWEN_AGENT_TEMPERATURE:0.42}
+  agent-top-p: ${QWEN_AGENT_TOP_P:0.88}
+# DeepSeek（OpenAI 兼容，用于 qwen.proxy-provider=deepseek 时的 /qwen-proxy 润色等）
+deepseek:
+  api-key: ${DEEPSEEK_API_KEY:${deepseek.fallback-api-key:}}
+  api-url: ${DEEPSEEK_API_URL:https://api.deepseek.com/v1/chat/completions}
+  model: ${DEEPSEEK_MODEL:deepseek-chat}
 
 jwt:
   secret: ${JWT_SECRET:smart-agriculture-demo-secret-change-me}
@@ -106,6 +122,10 @@ onenet:
   new-product-id: ${ONENET_NEW_PRODUCT_ID:}
   new-device-name: ${ONENET_NEW_DEVICE_NAME:}
   enabled: true
+
+# IoT 视觉预警 HTTP 回调（POST /alert/notification/callback）：不配密钥则仅 @AuthAccess 匿名可推；生产建议设置并带请求头 X-Alert-Callback-Secret
+iot:
+  callback-secret: ${IOT_CALLBACK_SECRET:}
 
 # 自动灌溉配置
 auto-irrigation:

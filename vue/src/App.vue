@@ -26,7 +26,48 @@
               <span class="status-dot"></span>
               {{ assistantName }}
             </div>
-            <span class="close-btn" @click="showChat = false">×</span>
+            <div class="chat-header-actions">
+              <button
+                type="button"
+                class="memory-link-btn"
+                @click.stop="toggleMemoryPanel"
+                :disabled="isLoading || isRecording"
+                title="查看或清空服务端持久记忆"
+              >
+                记忆
+              </button>
+              <button
+                type="button"
+                class="memory-link-btn"
+                @click.stop="rememberLastUserLine"
+                :disabled="isLoading || isRecording"
+                title="把上一句用户发言写入长期偏好"
+              >
+                记入偏好
+              </button>
+              <span class="close-btn" @click="showChat = false">×</span>
+            </div>
+          </div>
+
+          <div v-if="showMemoryPanel" class="memory-panel">
+            <div v-if="memoryLoading" class="memory-panel-loading">加载中…</div>
+            <div v-else-if="memoryLoadError" class="memory-panel-error">{{ memoryLoadError }}</div>
+            <div v-else class="memory-panel-inner">
+              <div class="memory-block">
+                <div class="memory-block-title">偏好（「记入偏好」）</div>
+                <div class="memory-block-body">{{ memorySnippetPrefs }}</div>
+              </div>
+              <div class="memory-block">
+                <div class="memory-block-title">对话滚动摘要（后端自动写入）</div>
+                <div class="memory-block-body">{{ memorySnippetSummary }}</div>
+              </div>
+              <div class="memory-panel-actions">
+                <button type="button" class="memory-mini-btn" @click="rememberLastUserLine" :disabled="memoryActionBusy || isLoading">记入上一句</button>
+                <button type="button" class="memory-mini-btn" @click="clearMemoryRemote('preferences')" :disabled="memoryActionBusy">清偏好</button>
+                <button type="button" class="memory-mini-btn" @click="clearMemoryRemote('summary')" :disabled="memoryActionBusy">清摘要</button>
+                <button type="button" class="memory-mini-btn danger" @click="clearMemoryRemote('all')" :disabled="memoryActionBusy">清空全部</button>
+              </div>
+            </div>
           </div>
 
           <div class="chat-body" ref="chatBody">
@@ -65,7 +106,7 @@
               type="text" 
               :placeholder="isRecording ? '正在聆听...' : '例如：帮我判断当前优先处理哪条预警'" 
             />
-            <button @click="sendMessage" :disabled="isLoading || isRecording">发送</button>
+            <button type="button" class="send-btn" @click="sendMessage" :disabled="isLoading || isRecording">发送</button>
           </div>
         </div>
       </transition>
@@ -119,10 +160,25 @@ export default {
       isRecording: false,
       recognition: null,
       voiceSupported: false,
-      assistantName: ASSISTANT_NAME
+      assistantName: ASSISTANT_NAME,
+      showMemoryPanel: false,
+      memoryLoading: false,
+      memoryLoadError: null,
+      memorySnapshot: null,
+      memoryActionBusy: false
     };
   },
   computed: {
+    memorySnippetPrefs() {
+      const s = this.memorySnapshot && this.memorySnapshot.preferences;
+      const t = s != null ? String(s).trim() : '';
+      return t || '（暂无）';
+    },
+    memorySnippetSummary() {
+      const s = this.memorySnapshot && this.memorySnapshot.conversationSummary;
+      const t = s != null ? String(s).trim() : '';
+      return t || '（暂无）';
+    },
     showFloatingChat() {
       return MAIN_STAGE_ROUTES.has(this.$route.path);
     },
@@ -156,6 +212,7 @@ export default {
     '$route.path'(path) {
       if (!MAIN_STAGE_ROUTES.has(path)) {
         this.showChat = false;
+        this.showMemoryPanel = false;
       }
     }
   },
@@ -236,8 +293,76 @@ export default {
     },
     toggleChat() {
       this.showChat = !this.showChat;
+      if (!this.showChat) {
+        this.showMemoryPanel = false;
+      }
       if (this.showChat) {
         this.scrollToBottom();
+      }
+    },
+    buildPlanHistoryForPlan() {
+      const out = [];
+      const prior = this.messages.length >= 1 ? this.messages.slice(0, -1) : [];
+      for (let i = 0; i < prior.length; i++) {
+        const m = prior[i];
+        if (!m || !m.content || !String(m.content).trim()) continue;
+        const role = m.role === 'ai' ? 'assistant' : m.role === 'user' ? 'user' : null;
+        if (!role) continue;
+        out.push({ role, content: String(m.content).trim() });
+      }
+      const max = 32;
+      return out.length > max ? out.slice(out.length - max) : out;
+    },
+    toggleMemoryPanel() {
+      this.showMemoryPanel = !this.showMemoryPanel;
+      if (this.showMemoryPanel) {
+        this.loadMemorySnapshot();
+      }
+    },
+    async loadMemorySnapshot() {
+      this.memoryLoading = true;
+      this.memoryLoadError = null;
+      this.memorySnapshot = null;
+      try {
+        const res = await request.get('/api/agent/memory');
+        if (res && (res.code === '200' || res.code === 200)) {
+          this.memorySnapshot = res.data;
+        } else {
+          this.memoryLoadError = (res && res.msg) ? res.msg : '加载失败';
+        }
+      } catch (e) {
+        console.error(e);
+        this.memoryLoadError = '无法加载（请确认已登录）';
+      } finally {
+        this.memoryLoading = false;
+      }
+    },
+    async clearMemoryRemote(scope) {
+      if (scope === 'all') {
+        try {
+          await this.$confirm('确定清空全部持久记忆？不可恢复。', '确认', { type: 'warning' });
+        } catch (e) {
+          return;
+        }
+      }
+      this.memoryActionBusy = true;
+      try {
+        const res = await request.post('/api/agent/memory/clear', { scope });
+        if (res && (res.code === '200' || res.code === 200)) {
+          this.memorySnapshot = res.data;
+          this.messages.push({
+            role: 'ai',
+            content: scope === 'all' ? '已清空全部记忆。' : scope === 'preferences' ? '已清空偏好记录。' : '已清空对话摘要。'
+          });
+          this.scrollToBottom();
+        } else {
+          this.$message.warning((res && res.msg) || '清空失败');
+        }
+      } catch (e) {
+        console.error(e);
+        this.$message.error('清空失败');
+      } finally {
+        this.memoryActionBusy = false;
       }
     },
     // 简单的文本换行处理
@@ -282,11 +407,17 @@ export default {
       try {
         // 调用Agent API生成计划
         const planRes = await request.post('/api/agent/plan', {
-          question: question
+          question: question,
+          history: this.buildPlanHistoryForPlan()
         });
 
-        // request 拦截器已经处理了响应，直接使用 planRes
-        if (planRes && (planRes.code === '200' || planRes.code === 200) && planRes.data) {
+        // request 拦截器已经处理了响应，直接使用 planRes（业务 code 与 HTTP 状态分离）
+        if (planRes && (planRes.code === '500' || planRes.code === 500)) {
+          this.messages.push({
+            role: 'ai',
+            content: (planRes.msg && String(planRes.msg).trim()) ? planRes.msg : '服务暂时不可用，请稍后再试。'
+          });
+        } else if (planRes && (planRes.code === '200' || planRes.code === 200) && planRes.data) {
           const plan = planRes.data;
           const filteredActions = this.filterCompetitionActions(plan.actions || []);
           
@@ -338,10 +469,13 @@ export default {
 
       } catch (error) {
         console.error('调用Agent API失败:', error);
-        // 显示更友好的错误信息
         let errorMsg = `${this.assistantName}暂时不可用，请稍后再试。`;
-        if (error.response) {
-          errorMsg = `服务器错误：${error.response.status}`;
+        const resData = error.response && error.response.data;
+        if (resData && typeof resData === 'object' && (resData.msg || resData.message)) {
+          errorMsg = resData.msg || resData.message;
+        } else if (error.response) {
+          const st = error.response.status;
+          errorMsg = st === 401 || st === 403 ? '登录已失效，请重新登录后再试。' : `服务器错误：${st}`;
         } else if (error.message) {
           errorMsg = `网络错误：${error.message}`;
         }
@@ -350,6 +484,40 @@ export default {
         this.isLoading = false;
         this.scrollToBottom();
       }
+    },
+    async rememberLastUserLine() {
+      const lastUser = [...this.messages].reverse().find((m) => m.role === 'user');
+      if (!lastUser || !String(lastUser.content || '').trim()) {
+        this.messages.push({ role: 'ai', content: '没有可记录的上一句用户发言。' });
+        this.scrollToBottom();
+        return;
+      }
+      try {
+        const res = await request.post('/api/agent/memory/note', {
+          note: String(lastUser.content).trim()
+        });
+        if (res && (res.code === '200' || res.code === 200)) {
+          this.messages.push({
+            role: 'ai',
+            content: '已写入长期偏好，之后禾序会结合数据库里的记录来回答。'
+          });
+          if (this.showMemoryPanel) {
+            this.loadMemorySnapshot();
+          }
+        } else {
+          this.messages.push({
+            role: 'ai',
+            content: (res && res.msg) ? res.msg : '写入失败，请确认已登录且后端已执行建表 SQL。'
+          });
+        }
+      } catch (e) {
+        console.error(e);
+        this.messages.push({
+          role: 'ai',
+          content: '写入失败：请确认已登录，且数据库已创建 agent_user_memory 表。'
+        });
+      }
+      this.scrollToBottom();
     },
     filterCompetitionActions(actions) {
       return actions.filter(action => this.isAllowedCompetitionAction(action));
@@ -721,7 +889,116 @@ html, body, #app {
   display: flex; 
   align-items: center; 
   gap: 10px;
+  min-width: 0;
+  flex: 1;
 }
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.memory-link-btn {
+  border: none;
+  background: transparent;
+  color: #009efd;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 8px;
+  white-space: nowrap;
+  transition: background 0.2s, color 0.2s;
+}
+.memory-link-btn:hover:not(:disabled) {
+  background: rgba(0, 158, 253, 0.1);
+  color: #0078d4;
+}
+.memory-link-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.memory-panel {
+  flex-shrink: 0;
+  max-height: 220px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  background: #f0f7ff;
+  font-size: 12px;
+  color: #334;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.memory-panel-loading,
+.memory-panel-error {
+  padding: 12px 16px;
+  text-align: center;
+  color: #666;
+}
+.memory-panel-error {
+  color: #c45656;
+}
+.memory-panel-inner {
+  padding: 10px 14px 12px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.memory-block {
+  margin-bottom: 10px;
+}
+.memory-block-title {
+  font-weight: 700;
+  color: #1a1a1a;
+  margin-bottom: 4px;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.memory-block-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 72px;
+  overflow-y: auto;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 158, 253, 0.12);
+  line-height: 1.45;
+  color: #2c3e50;
+}
+.memory-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.memory-mini-btn {
+  border: 1px solid rgba(0, 158, 253, 0.35);
+  background: #fff;
+  color: #009efd;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.memory-mini-btn:hover:not(:disabled) {
+  background: rgba(0, 158, 253, 0.08);
+}
+.memory-mini-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.memory-mini-btn.danger {
+  border-color: rgba(196, 86, 86, 0.45);
+  color: #c45656;
+}
+.memory-mini-btn.danger:hover:not(:disabled) {
+  background: rgba(196, 86, 86, 0.08);
+}
+
 .status-dot { 
   width: 8px; 
   height: 8px; 
@@ -890,17 +1167,19 @@ html, body, #app {
 
 /* 底部输入区 */
 .chat-footer {
-  padding: 16px 20px;
+  padding: 12px 14px;
   background: #fff;
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
   border-top: 1px solid rgba(0,0,0,0.05);
+  flex-shrink: 0;
 }
 
 .chat-footer input {
-  flex: 1;
-  padding: 12px 18px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 12px 16px;
   border-radius: 24px;
   border: 2px solid #f0f2f5;
   background: #f8f9fa;
@@ -938,7 +1217,16 @@ html, body, #app {
   transform: none;
 }
 
-/* 语音按钮优化 */
+.chat-footer .send-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 10px 18px;
+}
+
+.chat-footer .voice-btn {
+  padding: 0;
+  flex-shrink: 0;
+}
 .voice-btn {
   width: 44px;
   height: 44px;
