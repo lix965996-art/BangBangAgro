@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Build outputs
+dist/
+dist_electron/
+target/
+bin/
+*.class
+
+# Logs and runtime files
+logs/
+*.log
+*.err
+model_call_log.txt
+dev-server-current.*
+
+# Runtime uploads and generated AI detection outputs
+api_uploads/
+api_results/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+application-local.yml
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Python cache
+__pycache__/
+*.py[cod]

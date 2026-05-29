@@ -1,0 +1,31 @@
+
+QGroupBox {
+    border: 2px solid gray;
+    }
+
+QPushButton#SaveBtn{color:black;
+            background-color:rgb(255, 215, 0);
+            border-radius:6px}
+QPushButton#ExitBtn{color:black;
+            background-color:rgb(255, 215, 0);
+            border-radius:6px}
+QPushButton:hover{color:red}
+QPushButton:pressed{background-color:rgb(180,180,180);border: None;}
+QFrame#frame_2 {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(255, 250, 240, 220),
+        stop:1 rgba(255, 245, 230, 220));
+    border-radius: 12px;
+    border: 1px solid #ddd;
+}
+
+QFrame#frame_3 {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(250, 248, 245, 230),
+        stop:1 rgba(245, 243, 240, 230));
+    border-radius: 12px;
+    border: 1px solid #ddd;
+}
+
+
+#MainWindow{border-image:url(UIProgram/ui_imgs/2.jpg)}

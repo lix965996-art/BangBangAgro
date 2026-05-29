@@ -1,0 +1,174 @@
+server:
+  port: 9090
+  servlet:
+    context-path: /
+  tomcat:
+    max-threads: 200
+    min-spare-threads: 10
+  # 外部访问地址，生产环境需要配置为实际域名
+  domain: ${SERVER_DOMAIN:http://localhost:9090}
+
+spring:
+  application:
+    name: smart-agriculture
+  # 若存在 classpath 下的 application-local.yml（已 .gitignore），则合并其中的配置（用于本机 API Key）
+  config:
+    import: optional:classpath:application-local.yml
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.openai.autoconfigure.OpenAiAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiImageAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAgentAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeChatAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeEmbeddingAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeImageAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAudioSpeechAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAudioTranscriptionAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeRerankAutoConfiguration
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 云端部署时修改为实际数据库地址
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:smart-agriculture}?characterEncoding=utf8&useSSL=${DB_USE_SSL:false}&serverTimezone=UTC&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 50      # 从10改为50，支持更多并发
+      minimum-idle: 10           # 从5改为10，保持更多空闲连接
+      connection-timeout: 30000
+      idle-timeout: 300000       # 从600000改为300000（5分钟），更快释放空闲连接
+      max-lifetime: 1800000
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+      enabled: true
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+
+mybatis-plus:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.farmland.intel.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: true
+    lazy-loading-enabled: true
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# 日志配置（文件输出由 logback-spring.xml 管理）
+logging:
+  charset:
+    console: UTF-8
+    file: UTF-8
+  level:
+    root: info
+    com.farmland.intel: info
+    org.springframework.web: warn
+    org.mybatis: warn
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# 文件上传配置
+files:
+  upload:
+    # 使用用户主目录下的uploads文件夹
+    # 会自动创建在 C:/Users/Swift/smart-agriculture-uploads/
+    path: ${UPLOAD_PATH:${user.home}/smart-agriculture-uploads/}
+    allowed-types: jpg,jpeg,png,gif,pdf,doc,docx,xls,xlsx
+    max-size: 100MB
+
+# 高德地图API配置
+# web-key：控制台「后端 / Web服务」那条 Key，用于服务端代理；生产务必用环境变量 AMAP_WEB_KEY 覆盖
+amap:
+  js-key: ${AMAP_JS_KEY:}
+  web-key: ${AMAP_WEB_KEY:}
+  js-security-key: ${AMAP_JS_SECURITY_KEY:}
+  city: ${AMAP_CITY:430800}
+
+# 通义千问AI配置（智能Agent）
+# api-key：优先环境变量 QWEN_API_KEY；未设置时用 qwen.fallback-api-key（见 optional 的 application-local.yml，已 .gitignore）
+# proxy-provider：dashscope（默认）| deepseek。为 deepseek 时，仅 /api/chat/qwen-proxy 走 DeepSeek（OpenAI 兼容），前端路径与文案可不变；/ask 仍用下方 qwen 调 DashScope。
+# 若本机仍报 Invalid API-key：在 Windows「环境变量」里删除空的或旧的 QWEN_API_KEY，或把它改成正确的 sk-
+qwen:
+  api-key: ${QWEN_API_KEY:${qwen.fallback-api-key:}}
+  proxy-provider: ${QWEN_PROXY_PROVIDER:dashscope}
+  api-url: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+  embedding-api-url: ${QWEN_EMBEDDING_API_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+  model: qwen-max
+  # Agent 计划生成：略低温度更贴指令、少胡跳页面；可用环境变量覆盖
+  agent-temperature: ${QWEN_AGENT_TEMPERATURE:0.42}
+  agent-top-p: ${QWEN_AGENT_TOP_P:0.88}
+# DeepSeek（OpenAI 兼容，用于 qwen.proxy-provider=deepseek 时的 /qwen-proxy 润色等）
+deepseek:
+  api-key: ${DEEPSEEK_API_KEY:${deepseek.fallback-api-key:}}
+  api-url: ${DEEPSEEK_API_URL:https://api.deepseek.com/v1/chat/completions}
+  model: ${DEEPSEEK_MODEL:deepseek-chat}
+
+jwt:
+  secret: ${JWT_SECRET:}
+  expire-hours: ${JWT_EXPIRE_HOURS:12}
+
+# Python检测服务配置
+python:
+  api-url: ${PYTHON_API_URL:http://localhost:5000}
+
+# OneNET物联网平台配置（STM32硬件）
+onenet:
+  api-url: https://iot-api.heclouds.com
+  author-key: ${ONENET_AUTHOR_KEY:}
+  user-id: ${ONENET_USER_ID:}
+  version: 2022-05-01
+  product-id: ${ONENET_PRODUCT_ID:}
+  device-name: ${ONENET_DEVICE_NAME:}
+  new-product-id: ${ONENET_NEW_PRODUCT_ID:}
+  new-device-name: ${ONENET_NEW_DEVICE_NAME:}
+  enabled: true
+
+# IoT 视觉预警 HTTP 回调（POST /alert/notification/callback）：不配密钥则仅 @AuthAccess 匿名可推；生产建议设置并带请求头 X-Alert-Callback-Secret
+iot:
+  callback-secret: ${IOT_CALLBACK_SECRET:}
+
+# 自动灌溉配置
+auto-irrigation:
+  # === 开启灌溉条件（满足任一即可）===
+  # 土壤湿度阈值（低于此值自动开启灌溉，单位：%）
+  soil-humidity-threshold: 30
+  # 空气湿度阈值（低于此值自动开启灌溉，单位：%）
+  air-humidity-threshold: 40
+  # 温度阈值（高于此值自动开启灌溉降温，单位：℃）
+  temperature-threshold: 35
+
+  # === 关闭灌溉条件（满足所有恢复阈值，或超时）===
+  # 土壤湿度恢复阈值（高于此值可关闭灌溉，默认比开启阈值高5%）
+  soil-humidity-recover: 35
+  # 空气湿度恢复阈值（高于此值可关闭灌溉，默认比开启阈值高5%）
+  air-humidity-recover: 45
+  # 温度恢复阈值（低于此值可关闭灌溉，默认比开启阈值低5℃）
+  temperature-recover: 30
+  # 最大运行时长（分钟），超时强制关闭水泵
+  max-duration-minutes: 30
+
+# 无人农场自主巡检配置
+patrol:
+  enabled: ${PATROL_ENABLED:true}                 # 是否开启自主巡检（true/false）
+  interval-ms: ${PATROL_INTERVAL_MS:1800000}       # 巡检间隔毫秒，默认30分钟；测试可改为60000（1分钟）
+  soil-humidity-warn: 25   # 土壤湿度预警阈值（%），低于此值自动灌溉
+  temperature-warn: 38     # 温度预警阈值（℃），高于此值推送预警通知
+  light-warn: 500          # 光照预警阈值（lux），白天低于此值自动开补光灯
+  air-humidity-warn: 30    # 空气湿度预警阈值（%），低于此值记录事件
+
+# Agent 自主运行配置
+agent:
+  autonomous:
+    enabled: ${AGENT_AUTONOMOUS_ENABLED:false}      # 是否启用 Agent 自主决策（false=仅规则引擎）
+    confidence-threshold: 70                        # 置信度阈值（0-100），高于此值才自动执行
+    task-expiry-hours: 24                           # 任务过期时间（小时）

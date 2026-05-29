@@ -1,0 +1,79 @@
+{
+  "name": "vue",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "serve": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "build:electron": "vite build --mode electron",
+    "electron:preview": "npm run build:electron && electron electron/main.js",
+    "electron:icon": "node scripts/set-electron-icon.js",
+    "electron:installer": "node scripts/make-installer.js",
+    "electron:pack": "npm run build:electron && electron-builder --win --x64 --dir && npm run electron:icon && npm run electron:installer"
+  },
+  "dependencies": {
+    "@amap/amap-jsapi-loader": "^1.0.1",
+    "axios": "^1.7.0",
+    "echarts": "^5.6.0",
+    "echarts-gl": "^2.0.9",
+    "element-plus": "^2.9.1",
+    "gsap": "^3.13.0",
+    "leaflet": "^1.9.4",
+    "mitt": "^3.0.1",
+    "pinia": "^2.3.0",
+    "three": "^0.181.1",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.0",
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3",
+    "rcedit": "^4.0.1",
+    "sass": "^1.94.2",
+    "sharp": "^0.34.5",
+    "vite": "^6.0.0"
+  },
+  "main": "electron/main.js",
+  "build": {
+    "appId": "com.bangbangagro.desktop",
+    "productName": "BangBangAgro",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false
+    }
+  },
+  "browserslist": [
+    "> 1%",
+    "last 2 versions",
+    "not dead"
+  ]
+}

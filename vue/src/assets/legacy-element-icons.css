@@ -1,0 +1,22 @@
+i[class^="el-icon-"],
+i[class*=" el-icon-"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-style: normal;
+  line-height: 1;
+  vertical-align: -0.125em;
+}
+
+i[class^="el-icon-"]::before,
+i[class*=" el-icon-"]::before {
+  content: none !important;
+}
+
+i[class^="el-icon-"] svg,
+i[class*=" el-icon-"] svg {
+  width: 1em;
+  height: 1em;
+  display: block;
+  fill: currentColor;
+}
