@@ -55,6 +55,7 @@
 
 <script>
 import { useAppStore } from '@/store'
+import { getStoredUserRaw } from '@/utils/authStorage'
 import {
   ArrowDown,
   ChatDotSquare,
@@ -113,7 +114,7 @@ export default {
       this.$message.success("退出成功")
     },
     async fetchUnread() {
-      if (!localStorage.getItem('user')) return
+      if (!getStoredUserRaw()) return
       try {
         const res = await this.request.get('/chat-message/unread')
         if (res && res.code === '200') {

@@ -263,6 +263,8 @@
 </template>
 
 <script>
+import { getStoredUserRaw } from '@/utils/authStorage'
+
 export default {
   name: 'Chat',
   data() {
@@ -361,7 +363,7 @@ export default {
   },
   methods: {
     loadCurrentUser() {
-      const userStr = localStorage.getItem('user')
+      const userStr = getStoredUserRaw()
       if (userStr) {
         try {
           const user = JSON.parse(userStr)
@@ -412,7 +414,7 @@ export default {
     },
 
     connectWebSocket() {
-      const userStr = localStorage.getItem('user')
+      const userStr = getStoredUserRaw()
       const token = userStr ? JSON.parse(userStr).token : null
       if (!token || !this.myUsername) {
         setTimeout(() => this.connectWebSocket(), 1000)
@@ -884,15 +886,15 @@ export default {
 .chat-page {
   display: flex;
   height: calc(100vh - 60px);
-  background: #f5f7fa;
+  background: #f6f9f7;
 }
 
 /* 左侧面板 */
 .left-panel {
   width: 320px;
   min-width: 320px;
-  background: #fff;
-  border-right: 1px solid #e4e7ed;
+  background: #ffffff;
+  border-right: 1px solid #eef2f0;
   display: flex;
   flex-direction: column;
 }
@@ -901,23 +903,46 @@ export default {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 20px;
-  border-bottom: 1px solid #ebeef5;
+  padding: 22px 24px 14px;
+  border-bottom: none;
 }
 
 .panel-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #303133;
+  font-size: 22px;
+  font-weight: 800;
+  color: #172033;
+  letter-spacing: 0;
 }
 
 .search-box {
-  padding: 12px 16px;
+  padding: 4px 24px 14px;
+}
+
+.search-box :deep(.el-input__wrapper) {
+  min-height: 36px;
+  border-radius: 8px;
+  background: #f4f7f5;
+  box-shadow: none !important;
+  border: 1px solid transparent;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.search-box :deep(.el-input__wrapper:hover),
+.search-box :deep(.el-input__wrapper.is-focus) {
+  background: #ffffff;
+  border-color: #b9dec1;
+}
+
+.search-box :deep(.el-input__inner) {
+  box-shadow: none !important;
+  border: none !important;
+  background: transparent !important;
 }
 
 .contact-list {
   flex: 1;
   overflow-y: auto;
+  padding: 4px 12px 16px;
 }
 
 .contact-group {
@@ -925,27 +950,28 @@ export default {
 }
 
 .group-label {
-  padding: 8px 20px 4px;
+  padding: 12px 12px 6px;
   font-size: 12px;
-  color: #909399;
-  font-weight: 600;
+  color: #8b98a7;
+  font-weight: 700;
 }
 
 .contact-item {
   display: flex;
   align-items: center;
-  padding: 12px 20px;
+  padding: 10px 12px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background 0.2s, color 0.2s;
   position: relative;
+  border-radius: 8px;
 }
 
 .contact-item:hover {
-  background: #f5f7fa;
+  background: #f5f8f6;
 }
 
 .contact-item.active {
-  background: #ecf5ff;
+  background: #e8f6ee;
 }
 
 .avatar-group {
@@ -1000,7 +1026,7 @@ export default {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: #fff;
+  background: #ffffff;
 }
 
 .empty-chat {
@@ -1022,7 +1048,7 @@ export default {
   justify-content: space-between;
   align-items: center;
   padding: 12px 20px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid #eef2f0;
   background: #fff;
 }
 
@@ -1054,7 +1080,7 @@ export default {
   flex: 1;
   overflow-y: auto;
   padding: 20px;
-  background: #fafafa;
+  background: #f8faf9;
 }
 
 .loading-more {
@@ -1125,7 +1151,7 @@ export default {
   align-items: flex-end;
   gap: 12px;
   padding: 12px 20px;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px solid #eef2f0;
   background: #fff;
 }
 

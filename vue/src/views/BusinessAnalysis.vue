@@ -163,8 +163,8 @@ const controlMeta = {
     title: '补光联动'
   },
   pump: {
-    endpoint: '/aether/device/control/bump',
-    payload: value => ({ bump: value }),
+    endpoint: '/aether/device/control/pump',
+    payload: value => ({ pump: value }),
     title: '灌溉联动'
   }
 };

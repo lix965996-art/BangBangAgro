@@ -6,9 +6,13 @@ import com.farmland.intel.entity.AutoPatrolLog;
 import com.farmland.intel.entity.Notice;
 import com.farmland.intel.entity.SensorEvent;
 import com.farmland.intel.entity.Statistic;
+import com.farmland.intel.event.SensorDataSyncedEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -19,6 +23,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 无人农场自主巡检服务
@@ -48,11 +53,24 @@ public class AutoPatrolService {
     @Value("${agent.autonomous.enabled:false}")
     private boolean autonomousEnabled;
 
+    /** P1 改造: 是否启用事件驱动巡检(传感器数据更新后立即跑规则引擎) */
+    @Value("${patrol.event-driven.enabled:true}")
+    private boolean eventDrivenEnabled;
+
+    /** P1 改造: 事件驱动巡检的最短间隔(毫秒),防止传感器风暴 */
+    @Value("${patrol.event-driven.cooldown-ms:25000}")
+    private long eventDrivenCooldownMs;
+
     // ── 运行时状态 ──
     private final AtomicBoolean patrolEnabled = new AtomicBoolean(true);
     private volatile LocalDateTime lastPatrolTime = null;
-    private volatile int totalPatrols = 0;
-    private volatile int totalActions = 0;
+    private final AtomicInteger totalPatrols = new AtomicInteger(0);
+    private final AtomicInteger totalActions = new AtomicInteger(0);
+
+    /** P1 改造: 上次事件驱动巡检的时间戳,用于冷却去重 */
+    private volatile long lastEventDrivenPatrolMs = 0L;
+    /** P1 改造: 事件驱动巡检累计次数(运维观察用) */
+    private volatile int eventDrivenPatrolCount = 0;
 
     // ── 依赖 ──
     @Autowired
@@ -68,6 +86,9 @@ public class AutoPatrolService {
     private AgentService agentService;
 
     @Autowired(required = false)
+    private IAiConfigService aiConfigService;
+
+    @Autowired(required = false)
     private INoticeService noticeService;
 
     @Autowired(required = false)
@@ -79,6 +100,11 @@ public class AutoPatrolService {
     @Autowired(required = false)
     private ConfidenceEvaluator confidenceEvaluator;
 
+    /** P1 改造: self-injection 用于跨方法调 @Async,this. 自调用会绕过代理导致 @Async 失效 */
+    @Autowired
+    @Lazy
+    private AutoPatrolService self;
+
     @PostConstruct
     public void init() {
         patrolEnabled.set(patrolEnabledConfig);
@@ -89,7 +115,8 @@ public class AutoPatrolService {
     }
 
     /**
-     * 定时巡检任务，默认每30分钟执行一次，启动后60秒首次执行
+     * 定时巡检任务，默认每30分钟执行一次，启动后60秒首次执行。
+     * P1 改造后,这条线路退化为"兜底"——主线路是下面的事件驱动巡检。
      */
     @Scheduled(fixedDelayString = "${patrol.interval-ms:1800000}", initialDelay = 60000)
     public void runScheduledPatrol() {
@@ -101,14 +128,83 @@ public class AutoPatrolService {
     }
 
     /**
+     * P1 改造: 事件驱动巡检入口。
+     *
+     * 由 {@link com.farmland.intel.config.ScheduledTasks#syncOneNetData()}
+     * 每 30 秒同步完 OneNET 传感器数据后发布 {@link SensorDataSyncedEvent},
+     * 触发本方法。只跑 "第一层规则引擎",不跑 LLM 分析(那个走异步定时)。
+     *
+     * 特性:
+     * - 冷却去重: {@code patrol.event-driven.cooldown-ms} 内最多触发一次,防止传感器风暴
+     * - 异步执行: 不阻塞 OneNET 数据同步主线程
+     * - 失败兜底: 抛错不影响 {@link #runScheduledPatrol()} 定时兜底巡检
+     * - 关键开关: {@code patrol.event-driven.enabled=false} 可一键回退到老的纯定时模式
+     */
+    @Async
+    @EventListener
+    public void onSensorDataSynced(SensorDataSyncedEvent event) {
+        if (!patrolEnabled.get() || !eventDrivenEnabled) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastEventDrivenPatrolMs < eventDrivenCooldownMs) {
+            log.debug("【事件驱动巡检】冷却中(剩余 {} ms),跳过本次", eventDrivenCooldownMs - (now - lastEventDrivenPatrolMs));
+            return;
+        }
+        lastEventDrivenPatrolMs = now;
+        eventDrivenPatrolCount++;
+
+        try {
+            log.info("【事件驱动巡检】#{} 触发(source={}),执行轻量规则引擎",
+                    eventDrivenPatrolCount, event.getSourceLabel());
+            List<Statistic> farms = loadFarms();
+            List<AutoPatrolLog> logs = new ArrayList<>();
+            int actionCount = 0;
+            for (Statistic farm : farms) {
+                List<AutoPatrolLog> farmLogs = applyRuleEngine(farm, "event_driven");
+                for (AutoPatrolLog l : farmLogs) {
+                    if ("success".equals(l.getResult())) actionCount++;
+                }
+                logs.addAll(farmLogs);
+            }
+            if (!logs.isEmpty()) {
+                // P1 顺手优化: 用 saveBatch 替代单条 save 循环
+                try {
+                    patrolLogService.saveBatch(logs);
+                } catch (Exception e) {
+                    log.warn("【事件驱动巡检】saveBatch 失败,降级单条 save: {}", e.getMessage());
+                    for (AutoPatrolLog pl : logs) {
+                        try { patrolLogService.save(pl); } catch (Exception ignore) {}
+                    }
+                }
+            }
+            totalActions.addAndGet(actionCount);
+            log.info("【事件驱动巡检】#{} 完成 — 农田: {},触发操作: {}",
+                    eventDrivenPatrolCount, farms.size(), actionCount);
+        } catch (Exception e) {
+            log.warn("【事件驱动巡检】#{} 失败(不影响定时兜底): {}", eventDrivenPatrolCount, e.getMessage());
+        }
+    }
+
+    /**
      * 执行一次完整巡检（定时或手动触发）
      * @param triggerType "scheduled" | "manual"
      * @return 巡检结果摘要
      */
     public Map<String, Object> doPatrol(String triggerType) {
+        return doPatrol(triggerType, null);
+    }
+
+    /**
+     * 执行一次完整巡检（定时或手动触发）
+     * @param triggerType "scheduled" | "manual" | "event_driven"
+     * @param operatorId  手动触发时的操作员 sys_user.id (评分归因用); 其它触发为 null
+     * @return 巡检结果摘要
+     */
+    public Map<String, Object> doPatrol(String triggerType, Integer operatorId) {
         log.info("【无人农场】开始{}巡检", "scheduled".equals(triggerType) ? "定时" : "手动");
         lastPatrolTime = LocalDateTime.now();
-        totalPatrols++;
+        totalPatrols.incrementAndGet();
 
         List<AutoPatrolLog> allLogs = new ArrayList<>();
         int actionCount = 0;
@@ -154,45 +250,68 @@ public class AutoPatrolService {
             }
         }
 
-        // ── AI 综合分析 ──
-        String aiReport = null;
-        try {
-            aiReport = runAiAnalysis(farms, triggerType);
-        } catch (Exception e) {
-            log.warn("【无人农场】AI 巡检分析失败（规则引擎结果不受影响）: {}", e.getMessage());
+        // ── AI 综合分析 (P1 改造: 改异步,不阻塞主流程几十秒) ──
+        // 必须通过 self 代理调用,否则 this. 自调用会绕过 Spring AOP 让 @Async 失效
+        // operatorId: 手动触发=登录用户(用其 key)；定时/事件触发=null(系统 key 兜底,没配则跳过)
+        self.triggerAiAnalysisAsync(farms, triggerType, operatorId);
+        String aiReport = null; // 主流程已不持有该值,保留变量仅为下方日志格式兼容
+
+        // ── 给本次巡检产出的所有日志打上操作员 (仅手动触发, 用于周评分归因) ──
+        if ("manual".equals(triggerType) && operatorId != null) {
+            allLogs.forEach(l -> l.setOperatorId(operatorId));
         }
 
-        // 写入 AI 全局报告记录
-        if (StringUtils.hasText(aiReport)) {
-            AutoPatrolLog aiLog = buildLog(triggerType, null, "ai_analysis",
-                    "AI 综合巡检分析完成", null, "success");
-            aiLog.setAiReport(aiReport);
-            allLogs.add(0, aiLog);
-        }
-
-        // ── 批量持久化日志 ──
-        for (AutoPatrolLog pl : allLogs) {
+        // ── 批量持久化日志 (P3 改造: 单条 save 循环 → saveBatch,减少 N-1 次数据库往返) ──
+        if (!allLogs.isEmpty()) {
             try {
-                patrolLogService.save(pl);
+                patrolLogService.saveBatch(allLogs);
             } catch (Exception e) {
-                log.warn("【无人农场】保存巡检日志失败: {}", e.getMessage());
+                log.warn("【无人农场】saveBatch 失败,降级单条 save: {}", e.getMessage());
+                for (AutoPatrolLog pl : allLogs) {
+                    try { patrolLogService.save(pl); } catch (Exception ignore) {}
+                }
             }
         }
 
-        totalActions += actionCount;
-        log.info("【无人农场】{}巡检完成 — 农田: {}，触发操作: {}，新事件: {}，AI分析: {}",
+        totalActions.addAndGet(actionCount);
+        log.info("【无人农场】{}巡检完成 — 农田: {}，触发操作: {}，新事件: {}，AI分析: 已异步触发",
                 "scheduled".equals(triggerType) ? "定时" : "手动",
-                farms.size(), actionCount, newEvents.size(), aiReport != null ? "完成" : "跳过");
+                farms.size(), actionCount, newEvents.size());
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("triggerType", triggerType);
         result.put("farmsChecked", farms.size());
         result.put("actionsExecuted", actionCount);
         result.put("newEvents", newEvents.size());
-        result.put("aiReport", aiReport);
+        result.put("aiReport", "AI 综合分析已异步触发,完成后写入巡检日志,可在日志列表查看"); // P1 改造: 主流程不再阻塞
         result.put("logCount", allLogs.size());
         result.put("patrolTime", lastPatrolTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
         return result;
+    }
+
+    /**
+     * P1 改造: 异步触发 AI 综合分析,完成后自己写日志,不阻塞 doPatrol 主流程。
+     * 失败也只打 warn,不影响巡检结果。
+     */
+    @Async
+    public void triggerAiAnalysisAsync(List<Statistic> farms, String triggerType, Integer userId) {
+        try {
+            String report = runAiAnalysis(farms, triggerType, userId);
+            if (StringUtils.hasText(report)) {
+                AutoPatrolLog aiLog = buildLog(triggerType, null, "ai_analysis",
+                        "AI 综合巡检分析完成(异步)", null, "success");
+                aiLog.setAiReport(report);
+                // 打上发起用户：该报告只属于他（用他的 key 跑的），status 接口按此过滤
+                aiLog.setOperatorId(userId);
+                try {
+                    patrolLogService.save(aiLog);
+                } catch (Exception e) {
+                    log.warn("【AI 异步分析】写日志失败: {}", e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("【AI 异步分析】调用失败(不影响主巡检): {}", e.getMessage());
+        }
     }
 
     // ══════════════════════════════════════════════════
@@ -426,8 +545,28 @@ public class AutoPatrolService {
     // AI 综合分析层
     // ══════════════════════════════════════════════════
 
-    private String runAiAnalysis(List<Statistic> farms, String triggerType) {
+    /**
+     * AI 综合分析。
+     * @param userId 用谁的 AI key 跑分析：手动触发时=登录用户 id（用其个人中心配置的 key）；
+     *               后台定时/事件触发=null（无登录用户，降级用系统 yml key，没配则跳过）。
+     */
+    private String runAiAnalysis(List<Statistic> farms, String triggerType, Integer userId) {
         if (farms.isEmpty()) return null;
+
+        // ── 多租户硬性约束：只用「用户本人配置的 key」，绝不用公共/系统 key ──
+        // 1. 后台无人值守(userId=null)：没有登录用户 → 不跑 AI(避免误用系统兜底 key)
+        if (userId == null) {
+            log.debug("[auto_patrol] 无登录用户(后台触发),跳过 AI 分析(多租户不使用公共 key)");
+            return null;
+        }
+        // 2. 该用户没配自己的 key → 不跑 AI(前端会提示去个人中心配置)
+        if (aiConfigService != null) {
+            com.farmland.intel.entity.AiConfig cfg = aiConfigService.getByUserId(userId);
+            if (cfg == null || !StringUtils.hasText(cfg.getApiKey())) {
+                log.debug("[auto_patrol] 用户 {} 未配置自己的 AI key,跳过 AI 分析", userId);
+                return null;
+            }
+        }
 
         String patrolPrompt =
             "请对帮帮农农场执行一次自主巡检（触发方式：" +
@@ -437,7 +576,8 @@ public class AutoPatrolService {
             "3. 生成一份简洁的巡检报告，格式：「整体状态：xx；异常项：xx；建议：xx」，控制在80字以内";
 
         try {
-            AgentPlan plan = agentService.buildPlan(null, patrolPrompt, null, "agent", "auto_patrol");
+            // userId 非空 → resolveAiConfig 用该用户个人中心配置的 key；为空 → 降级系统 key
+            AgentPlan plan = agentService.buildPlan(userId, patrolPrompt, null, "agent", "auto_patrol");
             if (plan != null && StringUtils.hasText(plan.getAdvice())) {
                 return plan.getAdvice();
             }
@@ -454,7 +594,7 @@ public class AutoPatrolService {
     private String irrigationOn(String farmName) {
         try {
             if (oneNetService != null) {
-                return oneNetService.controlBump(true) ? "success" : "failed";
+                return oneNetService.controlPump(true) ? "success" : "failed";
             }
             return "skipped";  // OneNET 未配置
         } catch (Exception e) {
@@ -543,6 +683,6 @@ public class AutoPatrolService {
     public boolean isAutonomousEnabled() { return autonomousEnabled; }
 
     public LocalDateTime getLastPatrolTime() { return lastPatrolTime; }
-    public int getTotalPatrols()             { return totalPatrols; }
-    public int getTotalActions()             { return totalActions; }
+    public int getTotalPatrols()             { return totalPatrols.get(); }
+    public int getTotalActions()             { return totalActions.get(); }
 }

@@ -1,23 +1,29 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
 
-    <!-- 从 application.yml 读取日志路径前缀 -->
+    <!-- 从 application.yml 读取配置 -->
     <springProperty scope="context" name="LOG_PATH" source="logging.file.path" defaultValue="../logs"/>
-    <!-- 读取根日志级别，与 application.yml logging.level.root 保持一致 -->
     <springProperty scope="context" name="ROOT_LEVEL" source="logging.level.root" defaultValue="info"/>
 
-    <!-- 控制台输出 -->
+    <!-- 通用 pattern (兼容测试上下文,不用 %clr 等 Spring Boot 专有 converter) -->
+    <property name="LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"/>
+
+    <!-- ============================================================
+         Appender 1: 控制台
+         ============================================================ -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder charset="UTF-8">
-            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <pattern>${LOG_PATTERN}</pattern>
         </encoder>
     </appender>
 
-    <!-- 全量日志文件（INFO 及以上） -->
+    <!-- ============================================================
+         Appender 2: 全量日志文件(滚动)
+         ============================================================ -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${LOG_PATH}/smart-agriculture.log</file>
         <encoder charset="UTF-8">
-            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <pattern>${LOG_PATTERN}</pattern>
         </encoder>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
             <fileNamePattern>${LOG_PATH}/smart-agriculture.log.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
@@ -27,11 +33,13 @@
         </rollingPolicy>
     </appender>
 
-    <!-- 仅 ERROR 级别日志 -->
+    <!-- ============================================================
+         Appender 3: 仅 ERROR 级别(快速定位线上问题)
+         ============================================================ -->
     <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${LOG_PATH}/smart-agriculture-error.log</file>
         <encoder charset="UTF-8">
-            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <pattern>${LOG_PATTERN}</pattern>
         </encoder>
         <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
             <level>ERROR</level>
@@ -44,15 +52,62 @@
         </rollingPolicy>
     </appender>
 
-    <!--
-        包级别日志级别在 application.yml 中通过 logging.level 配置即可，
-        此处只定义 root logger 和 appender 绑定。
-        若需要更精细的控制（如某个类的独立 logger），可在此处添加。
-    -->
-    <root level="${ROOT_LEVEL}">
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="FILE"/>
-        <appender-ref ref="ERROR_FILE"/>
-    </root>
+    <!-- ============================================================
+         Appender 4 (v1.1.0 新增): 巡检 + Agent 决策专用日志
+         便于答辩演示时单独追踪自主决策链路
+         ============================================================ -->
+    <appender name="PATROL_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_PATH}/patrol-and-agent.log</file>
+        <encoder charset="UTF-8">
+            <pattern>${LOG_PATTERN}</pattern>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_PATH}/patrol-and-agent.log.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>200MB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <!-- ============================================================
+         专用 logger: 巡检 + Agent
+         这两个 service 的日志同时进入主文件和专用文件
+         ============================================================ -->
+    <logger name="com.farmland.intel.service.AutoPatrolService" level="INFO" additivity="true">
+        <appender-ref ref="PATROL_FILE"/>
+    </logger>
+    <logger name="com.farmland.intel.service.AgentService" level="INFO" additivity="true">
+        <appender-ref ref="PATROL_FILE"/>
+    </logger>
+    <logger name="com.farmland.intel.event" level="DEBUG" additivity="true">
+        <appender-ref ref="PATROL_FILE"/>
+    </logger>
+
+    <!-- ============================================================
+         环境区分: dev / prod
+         dev: 控制台 + 文件
+         prod: 仅文件(避免控制台输出消耗 CPU)
+         ============================================================ -->
+    <springProfile name="dev,default">
+        <root level="${ROOT_LEVEL}">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="FILE"/>
+            <appender-ref ref="ERROR_FILE"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="prod">
+        <root level="${ROOT_LEVEL}">
+            <appender-ref ref="FILE"/>
+            <appender-ref ref="ERROR_FILE"/>
+        </root>
+    </springProfile>
+
+    <!-- ============================================================
+         降噪: 常见噪音日志降级到 WARN
+         ============================================================ -->
+    <logger name="org.apache.tomcat" level="WARN"/>
+    <logger name="org.apache.catalina" level="WARN"/>
+    <logger name="org.springframework.web.servlet.DispatcherServlet" level="WARN"/>
 
 </configuration>

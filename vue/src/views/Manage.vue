@@ -26,6 +26,7 @@
 
 import Aside from "@/components/Aside";
 import Header from "@/components/Header";
+import { getStoredUserRaw } from '@/utils/authStorage'
 
 export default {
   name: 'Manage',
@@ -108,7 +109,7 @@ export default {
     getUser() {
       let username = "";
       try {
-        const userStr = localStorage.getItem("user");
+        const userStr = getStoredUserRaw();
         const user = userStr ? JSON.parse(userStr) : null;
         username = user ? user.username : "";
       } catch (e) {
@@ -316,14 +317,26 @@ export default {
 }
 
 /* 输入框样式 */
-:deep(.el-input__inner) {
+:deep(.el-input__wrapper) {
   border: 1px solid #dcdfe6;
   border-radius: 4px;
   transition: none;
+  box-shadow: none;
+}
+
+:deep(.el-input__wrapper.is-focus) {
+  border-color: #dcdfe6;
+  box-shadow: none;
+}
+
+:deep(.el-input__inner) {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 :deep(.el-input__inner:focus) {
-  border-color: #dcdfe6;
+  border: none;
   box-shadow: none;
 }
 

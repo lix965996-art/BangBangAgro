@@ -330,14 +330,14 @@ export default {
       return current ? current.label : '未设置';
     },
     serviceNote() { return this.serviceOnline ? `支持 ${this.availableCropLabels}` : this.serviceHintText; },
-    /** 摄像头/流媒体 ≠ Python 检测服务；避免画面已出仍显示「引擎离线」造成误解 */
+    /** 摄像头/流媒体与分析服务是两条链路，避免画面已出仍显示「引擎离线」造成误解 */
     analysisServiceBadge() {
       if (this.serviceOnline) {
         return {
           cls: 'online',
           icon: 'el-icon-success',
           label: '分析服务在线',
-          tip: '后端已连通 Python 检测服务（integrated_api_server），可执行「执行 AI 分析」。'
+          tip: '智能识别服务已就绪，可执行「执行 AI 分析」。'
         };
       }
       if (this.streamActive) {
@@ -346,14 +346,14 @@ export default {
           icon: 'el-icon-warning-outline',
           label: '画面已接通 · 分析服务离线',
           tip:
-            '当前 MJPEG 画面在浏览器内已加载，但「分析服务」指 Spring 转发的 Python 模型接口（/crop-analysis/health）。请在本机启动 TomatoDetection 下的 integrated_api_server.py，并在 application.yml 配置 python.api-url 指向该服务。'
+            '当前监控画面已接通，但智能识别服务暂不可用。请检查分析服务状态后重试。'
         };
       }
       return {
         cls: 'offline',
         icon: 'el-icon-error',
         label: '分析服务离线',
-        tip: '未检测到 Python 检测服务。请启动 integrated_api_server.py 并检查后端 python.api-url。'
+        tip: '智能识别服务暂不可用，请检查分析服务状态后重试。'
       };
     },
     selectedFarm() { return this.farms.find(item => item.id === this.selectedFarmId) || null; },
@@ -825,8 +825,10 @@ export default {
 .control-row { display: flex; gap: 16px; }
 .control-item { flex: 1; display: flex; flex-direction: column; gap: 6px;}
 .control-label { color: #64748b; font-size: 12px; font-weight: 600;}
-:deep(.custom-select .el-input__inner ){ border-color: #e2e8f0; border-radius: 8px; }
-:deep(.custom-select .el-input__inner:focus ){ border-color: #739d89 !important; }
+:deep(.custom-select .el-input__wrapper ){ border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: none; }
+:deep(.custom-select .el-input__wrapper.is-focus ){ border-color: #739d89 !important; box-shadow: none; }
+:deep(.custom-select .el-input__inner ){ border: none; border-radius: 0; box-shadow: none; }
+:deep(.custom-select .el-input__inner:focus ){ border: none !important; box-shadow: none; }
 
 .soft-divider { margin: 16px 0; background-color: #e8ebe8; }
 

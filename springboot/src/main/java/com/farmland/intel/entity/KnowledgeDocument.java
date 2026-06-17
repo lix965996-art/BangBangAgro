@@ -1,6 +1,8 @@
 package com.farmland.intel.entity;
 
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -40,6 +42,13 @@ public class KnowledgeDocument implements Serializable {
 
     /** 来源 */
     private String source;
+
+    /** 创建人ID — 永不参与 update (FieldStrategy.NEVER), 防 partial-body 把 created_by 置 null */
+    @TableField(updateStrategy = FieldStrategy.NEVER)
+    private Integer createdBy;
+
+    /** 最后修改人ID */
+    private Integer updatedBy;
 
     /** 创建时间 */
     private Date createdAt;

@@ -153,6 +153,7 @@ const MAIN_STAGE_ROUTES = new Set([
   '/farm-map-gaode',
   '/farmmap3d',
   '/alert-center',
+  '/auto-patrol',
   '/unmanned-dashboard',
   '/business-analysis'
 ]);
@@ -859,7 +860,7 @@ html, body, #app {
   right: 30px;
   z-index: 99999 !important;
   font-family: 'PingFang SC', 'Segoe UI', Roboto, sans-serif;
-  pointer-events: auto !important;
+  pointer-events: none !important;
 }
 
 /* 2. 悬浮球按钮 - 科技感升级 */
@@ -878,6 +879,7 @@ html, body, #app {
   position: relative;
   overflow: hidden;
   border: 2px solid rgba(255, 255, 255, 0.2);
+  pointer-events: auto;
 }
 .fab-btn::after {
   content: '';
@@ -921,6 +923,7 @@ html, body, #app {
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 0 1px rgba(0,0,0,0.1);
   transform-origin: bottom right;
   animation: popIn 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  pointer-events: auto;
 }
 
 /* 顶部栏 */
@@ -1374,7 +1377,7 @@ html, body, #app {
 }
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.3s, transform 0.3s; }
-.fade-enter, .fade-leave-to { opacity: 0; transform: translateY(20px); }
+.fade-enter-from, .fade-leave-to { opacity: 0; transform: translateY(20px); }
 
 /* Loading 动画优化 */
 .loading span {

@@ -26,6 +26,9 @@ public class AutoPatrolLog implements Serializable {
     /** 触发方式：scheduled / manual */
     private String triggerType;
 
+    /** 手动触发操作员ID (sys_user.id, 周滚动评分归因用) */
+    private Integer operatorId;
+
     /** 涉及农田名称，null 表示全局巡检记录 */
     private String farmName;
 

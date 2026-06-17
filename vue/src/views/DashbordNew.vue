@@ -492,11 +492,16 @@ export default {
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .header-right { display: flex; align-items: center; gap: 12px; }
-:deep(.ios-select .el-input__inner ){
+:deep(.ios-select .el-input__wrapper ){
   background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 10px;
-  height: 38px; line-height: 38px; color: #1C1C1E; font-weight: 500;
+  height: 38px; box-shadow: none;
 }
-:deep(.ios-select .el-input__inner:focus ){ border-color: #007AFF; box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.1); }
+:deep(.ios-select .el-input__wrapper.is-focus ){ border-color: #007AFF; box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.1); }
+:deep(.ios-select .el-input__inner ){
+  border: none; border-radius: 0; box-shadow: none; background: transparent;
+  height: 36px; line-height: 36px; color: #1C1C1E; font-weight: 500;
+}
+:deep(.ios-select .el-input__inner:focus ){ border: none; box-shadow: none; }
 .farm-select { width: 220px; }
 .ios-btn-secondary {
   background: #FFFFFF !important; border: 1px solid #E5E5EA !important; color: #007AFF !important;

@@ -44,8 +44,8 @@ spring:
       max-lifetime: 1800000
   servlet:
     multipart:
-      max-file-size: 100MB
-      max-request-size: 100MB
+      max-file-size: 20MB
+      max-request-size: 20MB
       enabled: true
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
@@ -84,7 +84,7 @@ files:
     # 会自动创建在 C:/Users/Swift/smart-agriculture-uploads/
     path: ${UPLOAD_PATH:${user.home}/smart-agriculture-uploads/}
     allowed-types: jpg,jpeg,png,gif,pdf,doc,docx,xls,xlsx
-    max-size: 100MB
+    max-size: 20MB
 
 # 高德地图API配置
 # web-key：控制台「后端 / Web服务」那条 Key，用于服务端代理；生产务必用环境变量 AMAP_WEB_KEY 覆盖
@@ -114,7 +114,7 @@ deepseek:
   model: ${DEEPSEEK_MODEL:deepseek-chat}
 
 jwt:
-  secret: ${JWT_SECRET:}
+  secret: ${JWT_SECRET:bang-bang-agro-dev-secret-key-for-local-only-32chars}
   expire-hours: ${JWT_EXPIRE_HOURS:12}
 
 # Python检测服务配置
@@ -160,11 +160,38 @@ auto-irrigation:
 # 无人农场自主巡检配置
 patrol:
   enabled: ${PATROL_ENABLED:true}                 # 是否开启自主巡检（true/false）
-  interval-ms: ${PATROL_INTERVAL_MS:1800000}       # 巡检间隔毫秒，默认30分钟；测试可改为60000（1分钟）
+  interval-ms: ${PATROL_INTERVAL_MS:1800000}       # 定时兜底巡检间隔毫秒，默认30分钟；测试可改为60000（1分钟）
   soil-humidity-warn: 25   # 土壤湿度预警阈值（%），低于此值自动灌溉
   temperature-warn: 38     # 温度预警阈值（℃），高于此值推送预警通知
   light-warn: 500          # 光照预警阈值（lux），白天低于此值自动开补光灯
   air-humidity-warn: 30    # 空气湿度预警阈值（%），低于此值记录事件
+  # P1 改造: 事件驱动巡检 — STM32 每 30 秒同步后立即触发轻量规则引擎,延迟从 30 分钟→秒级
+  event-driven:
+    enabled: ${PATROL_EVENT_DRIVEN_ENABLED:true}    # 一键开关:false 回退到纯定时模式
+    cooldown-ms: ${PATROL_EVENT_DRIVEN_COOLDOWN:25000}  # 冷却(防传感器风暴);25 秒内最多触发一次
+
+# 周滚动员工评分配置 (UserScoreService)
+score:
+  enabled: ${SCORE_ENABLED:true}                  # 总开关: false 则定时任务与回填都不算分
+  cron: ${SCORE_CRON:0 30 2 * * ?}                # 每天 02:30 重算 trailing-7-day 窗口
+  window-days: 7                                  # 滚动窗口天数
+  alert-sla-minutes: 30                           # 预警响应 SLA (分钟), 达标即满分
+  ai-duration-target-ms: 8000                     # 智能体工具链平均耗时基准 (ms)
+  min-events-for-confidence: 3                    # 窗口内事件总数 < 此值 → 数据不足(data_thin), 前端置灰
+  min-cohort-for-percentile: 3                    # 同行 cohort < 此值 → 子分用原始值不做百分位归一
+  cap:                                            # 每维原始计数上限 (防刷, 超过不再加分)
+    alert-count: 20
+    ai-chains: 15
+    approval-count: 15
+    knowledge-count: 10
+  weight:                                         # 5 维权重, 落库时会按"有数据维度"重分配归一
+    alert: 0.30
+    ai: 0.25
+    approval: 0.20
+    attendance: 0.15
+    knowledge: 0.10
+  commentary:
+    enabled: ${SCORE_COMMENTARY_ENABLED:true}     # 评语 LLM 开关: false 走模板
 
 # Agent 自主运行配置
 agent:
@@ -172,3 +199,21 @@ agent:
     enabled: ${AGENT_AUTONOMOUS_ENABLED:false}      # 是否启用 Agent 自主决策（false=仅规则引擎）
     confidence-threshold: 70                        # 置信度阈值（0-100），高于此值才自动执行
     task-expiry-hours: 24                           # 任务过期时间（小时）
+
+# Actuator 探活与 info 端点(国赛运维规范);敏感端点不开放
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized
+
+info:
+  app:
+    name: 帮帮农智慧农业平台
+    description: 设施农业数字化协同系统 - Agent + IoT + 数字孪生
+    version: 1.1.0
+    java: 17
+    spring-boot: 3.4.5

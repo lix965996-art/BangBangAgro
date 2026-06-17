@@ -13,10 +13,16 @@ import com.farmland.intel.common.Result;
 import com.farmland.intel.config.interceptor.AuthAccess;
 import com.farmland.intel.controller.dto.UserDTO;
 import com.farmland.intel.controller.dto.UserPasswordDTO;
+import com.farmland.intel.entity.ScoreAdjustment;
 import com.farmland.intel.entity.User;
+import com.farmland.intel.entity.UserScoreSnapshot;
+import com.farmland.intel.service.IScoreAdjustmentService;
+import com.farmland.intel.service.IUserScoreSnapshotService;
 import com.farmland.intel.service.IUserService;
+import com.farmland.intel.service.UserScoreService;
 import com.farmland.intel.utils.PasswordUtils;
 import com.farmland.intel.utils.TokenUtils;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 import cn.hutool.core.util.RandomUtil;
@@ -24,13 +30,20 @@ import org.springframework.web.multipart.MultipartFile;
 
 import jakarta.annotation.Resource;
 import jakarta.servlet.ServletOutputStream;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.InputStream;
 import java.net.URLEncoder;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/user")
+@Slf4j
 public class UserController {
 
     @Value("${files.upload.path}")
@@ -39,14 +52,37 @@ public class UserController {
     @Resource
     private IUserService userService;
 
+    @Resource
+    private IUserScoreSnapshotService snapshotService;
+
+    @Resource
+    private IScoreAdjustmentService adjustmentService;
+
+    @Resource
+    private UserScoreService userScoreService;
+
     @PostMapping("/login")
-    public Result login(@RequestBody UserDTO userDTO) {
+    public Result login(@RequestBody UserDTO userDTO, HttpServletRequest request) {
         String username = userDTO.getUsername();
         String password = userDTO.getPassword();
         if (StrUtil.isBlank(username) || StrUtil.isBlank(password)) {
             return Result.error(Constants.CODE_400, "参数错误");
         }
-        return Result.success(userService.login(userDTO));
+        return Result.success(userService.login(userDTO, getClientIp(request)));
+    }
+
+    /** 取真实客户端 IP：优先 X-Forwarded-For / X-Real-IP（经 Nginx 等代理时），兜底 RemoteAddr */
+    private String getClientIp(HttpServletRequest request) {
+        if (request == null) return null;
+        String[] headers = {"X-Forwarded-For", "X-Real-IP", "Proxy-Client-IP", "WL-Proxy-Client-IP"};
+        for (String h : headers) {
+            String ip = request.getHeader(h);
+            if (ip != null && !ip.isEmpty() && !"unknown".equalsIgnoreCase(ip)) {
+                int comma = ip.indexOf(',');          // X-Forwarded-For 可能是 "真实IP, 代理IP"
+                return (comma > 0 ? ip.substring(0, comma) : ip).trim();
+            }
+        }
+        return request.getRemoteAddr();
     }
 
     @PostMapping("/register")
@@ -76,16 +112,30 @@ public class UserController {
             user.setNickname(username);
         }
 
-        if (user.getId() != null) {
+        boolean isNewUser = user.getId() == null;
+        String initialPasswordPlain = null;
+
+        if (!isNewUser) {
             user.setPassword(null);
         } else {
+            // BUG-01 修复:新建用户时若没传密码,生成可读的默认密码并通过 msg 返回给管理员
+            // 旧逻辑用 RandomUtil 生成 12 位随机字符串,sanitize 又把密码置 null,
+            // 导致管理员/新用户都不知道密码,新用户永远无法登录。
             if (StrUtil.isBlank(user.getPassword())) {
-                user.setPassword(RandomUtil.randomString(12));
+                initialPasswordPlain = "Aa" + username + "@2026";
+                user.setPassword(initialPasswordPlain);
+                log.info("[新建用户] {} 未指定密码,使用默认初始密码 {} (请通知用户首次登录后修改)",
+                        username, initialPasswordPlain);
             }
             user.setPassword(PasswordUtils.encode(user.getPassword()));
         }
 
         userService.saveOrUpdate(user);
+
+        if (initialPasswordPlain != null) {
+            return Result.success(sanitizeUser(user),
+                    "用户 " + username + " 已创建,初始密码:" + initialPasswordPlain + " (请告知用户首次登录后修改)");
+        }
         return Result.success(sanitizeUser(user));
     }
 
@@ -118,9 +168,10 @@ public class UserController {
             return Result.error("-1", "用户名或手机号不正确");
         }
         User user = list.get(0);
-        user.setPassword(PasswordUtils.encode(RandomUtil.randomString(12)));
+        String newPasswordPlain = RandomUtil.randomString(12);
+        user.setPassword(PasswordUtils.encode(newPasswordPlain));
         userService.updateById(user);
-        return Result.success();
+        return Result.success(newPasswordPlain, "密码重置成功，请妥善保管新密码");
     }
 
     /**
@@ -220,6 +271,7 @@ public class UserController {
 
         Page<User> page = userService.page(new Page<>(pageNum, pageSize), queryWrapper);
         sanitizeUsers(page.getRecords());
+        enrichScores(page.getRecords());
         return Result.success(page);
     }
 
@@ -315,9 +367,224 @@ public class UserController {
         return Result.success(true);
     }
 
+    /**
+     * 用户统计：今日出勤率、总人数
+     */
+    @GetMapping("/stats")
+    public Result getUserStats() {
+        java.util.Map<String, Object> stats = new java.util.HashMap<>();
+        long total = userService.count();
+        stats.put("total", total);
+
+        // 统计今日登录人数（lastLoginTime 在今天）
+        java.util.Calendar today = java.util.Calendar.getInstance();
+        today.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        today.set(java.util.Calendar.MINUTE, 0);
+        today.set(java.util.Calendar.SECOND, 0);
+        today.set(java.util.Calendar.MILLISECOND, 0);
+        java.util.Date todayStart = today.getTime();
+
+        long activeToday = userService.count(
+            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<User>()
+                .ge("last_login_time", todayStart)
+        );
+        stats.put("activeToday", activeToday);
+        stats.put("attendanceRate", total > 0 ? Math.round(activeToday * 1000.0 / total) / 10.0 : 0);
+
+        return Result.success(stats);
+    }
+
+    /**
+     * 保存安全问题（登录后调用）
+     */
+    @PostMapping("/security-question")
+    public Result saveSecurityQuestion(@RequestBody java.util.Map<String, String> params) {
+        String question = params.get("question");
+        String answer = params.get("answer");
+        if (StrUtil.isBlank(question) || StrUtil.isBlank(answer)) {
+            return Result.error(Constants.CODE_400, "问题和答案不能为空");
+        }
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error(Constants.CODE_401, "请先登录");
+        }
+        User user = userService.getById(currentUser.getId());
+        user.setSecurityQuestion(question);
+        user.setSecurityAnswer(answer.trim());
+        userService.updateById(user);
+        return Result.success("安全问题设置成功");
+    }
+
+    /**
+     * 获取指定用户的安全问题（找回密码用，无需登录）
+     */
+    @AuthAccess
+    @GetMapping("/security-question")
+    public Result getSecurityQuestion(@RequestParam String username) {
+        if (StrUtil.isBlank(username)) {
+            return Result.error(Constants.CODE_400, "用户名不能为空");
+        }
+        User user = userService.getOne(
+            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<User>()
+                .eq("username", username)
+        );
+        if (user == null) {
+            return Result.error(Constants.CODE_404, "用户不存在");
+        }
+        if (StrUtil.isBlank(user.getSecurityQuestion())) {
+            return Result.error(Constants.CODE_400, "该用户未设置安全问题");
+        }
+        java.util.Map<String, String> data = new java.util.HashMap<>();
+        data.put("question", user.getSecurityQuestion());
+        return Result.success(data);
+    }
+
+    /**
+     * 通过安全问题验证后重置密码（无需登录）
+     */
+    @AuthAccess
+    @PostMapping("/reset-by-question")
+    public Result resetByQuestion(@RequestBody java.util.Map<String, String> params) {
+        String username = params.get("username");
+        String answer = params.get("answer");
+        String newPassword = params.get("newPassword");
+        if (StrUtil.isBlank(username) || StrUtil.isBlank(answer) || StrUtil.isBlank(newPassword)) {
+            return Result.error(Constants.CODE_400, "参数不完整");
+        }
+        if (newPassword.length() < 6) {
+            return Result.error(Constants.CODE_400, "密码长度至少6位");
+        }
+        User user = userService.getOne(
+            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<User>()
+                .eq("username", username)
+        );
+        if (user == null) {
+            return Result.error(Constants.CODE_404, "用户不存在");
+        }
+        if (StrUtil.isBlank(user.getSecurityQuestion())) {
+            return Result.error(Constants.CODE_400, "该用户未设置安全问题");
+        }
+        if (!answer.trim().equals(user.getSecurityAnswer())) {
+            return Result.error(Constants.CODE_400, "答案错误");
+        }
+        user.setPassword(PasswordUtils.encode(newPassword));
+        userService.updateById(user);
+        return Result.success("密码重置成功");
+    }
+
+    // ==================== 周滚动评分 ====================
+
+    /** 绩效明细 (绩效弹窗用): 管理员可查任意人, 普通用户只能查自己 */
+    @GetMapping("/score")
+    public Result getScore(@RequestParam Integer userId) {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) return Result.error(Constants.CODE_401, "未登录");
+        if (!Constants.ROLE_ADMIN.equals(currentUser.getRole()) && !currentUser.getId().equals(userId)) {
+            return Result.error(Constants.CODE_401, "无权限");
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        UserScoreSnapshot s = snapshotService.getLatestByUser(userId);
+        if (s == null) {
+            data.put("available", false);
+            return Result.success(data);
+        }
+        data.put("available", true);
+        data.put("total", s.getTotal());
+        data.put("grade", s.getGrade());
+        data.put("commentary", s.getCommentary());
+        data.put("dataThin", s.getDataThin() != null && s.getDataThin() == 1);
+        data.put("isOverride", s.getIsOverride() != null && s.getIsOverride() == 1);
+        data.put("windowStart", s.getWindowStart());
+        data.put("windowEnd", s.getWindowEnd());
+        Map<String, Object> subs = new LinkedHashMap<>();
+        subs.put("alert", s.getAlertSub());
+        subs.put("ai", s.getAiSub());
+        subs.put("approval", s.getApprovalSub());
+        subs.put("attendance", s.getAttendanceSub());
+        subs.put("knowledge", s.getKnowledgeSub());
+        data.put("subs", subs);
+        return Result.success(data);
+    }
+
+    /** 管理员人工覆写总分 (写审计表 + 标记 is_override), 仅管理员 */
+    @PostMapping("/score/override")
+    public Result overrideScore(@RequestBody Map<String, Object> body) {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null || !Constants.ROLE_ADMIN.equals(currentUser.getRole())) {
+            return Result.error(Constants.CODE_401, "无权限，仅管理员可操作");
+        }
+        Object uidObj = body.get("userId");
+        Object totalObj = body.get("newTotal");
+        String reason = body.get("reason") == null ? "" : body.get("reason").toString();
+        if (uidObj == null || totalObj == null) {
+            return Result.error(Constants.CODE_400, "userId 和 newTotal 不能为空");
+        }
+        Integer userId;
+        BigDecimal newTotal;
+        try {
+            userId = Integer.valueOf(uidObj.toString());
+            newTotal = new BigDecimal(totalObj.toString()).setScale(2, RoundingMode.HALF_UP);
+        } catch (NumberFormatException ex) {
+            return Result.error(Constants.CODE_400, "参数格式错误");
+        }
+        UserScoreSnapshot s = snapshotService.getLatestByUser(userId);
+        if (s == null) return Result.error(Constants.CODE_404, "该用户暂无评分快照, 请先回填");
+        ScoreAdjustment adj = new ScoreAdjustment();
+        adj.setUserId(userId);
+        adj.setWindowStart(s.getWindowStart());
+        adj.setAdminId(currentUser.getId());
+        adj.setOldTotal(s.getTotal());
+        adj.setNewTotal(newTotal);
+        adj.setReason(reason);
+        adj.setCreatedAt(new java.util.Date());
+        adjustmentService.save(adj);
+
+        s.setTotal(newTotal);
+        s.setGrade(gradeOf(newTotal.doubleValue()));
+        s.setIsOverride(1);
+        snapshotService.updateById(s);
+        return Result.success("已覆写");
+    }
+
+    /** 手动回填当前窗口评分 (部署后立即出数), 仅管理员 */
+    @PostMapping("/score/backfill")
+    public Result backfillScore() {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null || !Constants.ROLE_ADMIN.equals(currentUser.getRole())) {
+            return Result.error(Constants.CODE_401, "无权限，仅管理员可操作");
+        }
+        int n = userScoreService.computeAndPersistWindow();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("scored", n);
+        return Result.success(data, "回填完成, 共评分 " + n + " 名用户");
+    }
+
+    /** 把每个用户的最新评分总分/评级挂到 transient 字段 (供卡片展示) */
+    private void enrichScores(List<User> users) {
+        if (users == null || users.isEmpty()) return;
+        List<Integer> ids = users.stream().map(User::getId).collect(Collectors.toList());
+        Map<Integer, UserScoreSnapshot> latest = snapshotService.getLatestByUserIds(ids);
+        for (User u : users) {
+            UserScoreSnapshot s = latest.get(u.getId());
+            if (s != null) {
+                u.setScoreTotal(s.getTotal() != null ? s.getTotal().doubleValue() : null);
+                u.setScoreGrade(s.getGrade());
+            }
+        }
+    }
+
+    private String gradeOf(double total) {
+        if (total >= 90) return "S";
+        if (total >= 80) return "A";
+        if (total >= 70) return "B";
+        if (total >= 60) return "C";
+        return "D";
+    }
+
     private User sanitizeUser(User user) {
         if (user != null) {
             user.setPassword(null);
+            user.setSecurityAnswer(null);
         }
         return user;
     }

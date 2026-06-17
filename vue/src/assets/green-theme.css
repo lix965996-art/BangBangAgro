@@ -104,15 +104,29 @@ body {
 }
 
 /* 输入框组件 */
-.el-input__inner {
+.el-input__wrapper {
   border: 2px solid #e0e0e0 !important;
   border-radius: 6px !important;
   transition: all 0.3s ease;
+  box-shadow: none !important;
+}
+
+.el-input__wrapper:hover,
+.el-input__wrapper.is-focus {
+  border-color: #4caf50 !important;
+  box-shadow: 0 0 8px rgba(76, 175, 80, 0.3) !important;
+}
+
+.el-input__inner {
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
 }
 
 .el-input__inner:focus {
-  border-color: #4caf50 !important;
-  box-shadow: 0 0 8px rgba(76, 175, 80, 0.3) !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
 .el-input-group__append .el-button {
@@ -175,11 +189,12 @@ body {
 }
 
 /* 选择器组件 */
-.el-select .el-input__inner {
+.el-select .el-input__wrapper {
   border-color: #e0e0e0 !important;
+  box-shadow: none !important;
 }
 
-.el-select .el-input.is-focus .el-input__inner {
+.el-select .el-input.is-focus .el-input__wrapper {
   border-color: #4caf50 !important;
 }
 

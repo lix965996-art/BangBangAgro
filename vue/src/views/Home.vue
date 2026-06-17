@@ -39,7 +39,7 @@
           <el-tag size="mini" effect="dark" color="#8b5cf6" style="border:none">今日已生成</el-tag>
         </div>
         <div class="ai-body">
-          <p class="typing-text">{{ aiAdvice }}<span class="cursor">|</span></p>
+          <p class="typing-text">{{ aiAdvice }}<span v-if="isTypingAdvice" class="cursor">|</span></p>
         </div>
         <div class="ai-footer-bar">
           <span><i class="el-icon-cloudy"></i> 气象关联分析</span>
@@ -188,6 +188,8 @@
 </template>
 
 <script>
+import { getStoredUserRaw } from '@/utils/authStorage'
+
 export default {
   name: 'Home',
   data() {
@@ -196,7 +198,7 @@ export default {
       currentDate: new Date().toLocaleDateString(),
       currentTemp: '26',
       weatherText: '晴转多云',
-      aiAdvice: '',
+      aiAdvice: '正在连接智能农情日报...',
       totalRevenue: 0,
       totalYield: 0,
       deviceOnline: true,
@@ -216,7 +218,8 @@ export default {
       weatherData: {},
       farmlandData: [],
       suggestions: [],
-      typeWriterTimer: null
+      typeWriterTimer: null,
+      isTypingAdvice: false
     }
   },
   beforeUnmount() {
@@ -242,7 +245,7 @@ export default {
   methods: {
     getUserName() {
       try {
-        const userStr = localStorage.getItem('user');
+        const userStr = getStoredUserRaw();
         if (userStr) {
           const user = JSON.parse(userStr);
           this.username = user.nickname || user.username || '场主';
@@ -254,7 +257,7 @@ export default {
     async initDashboard() {
       // 获取地块列表
       await this.fetchFarmList();
-      // 获取动态农情日报
+      // AI 日报恢复自动触发(用户要求),已加 8 秒超时 + 兜底文案,不会再卡死
       this.fetchAgriDailyReport();
       this.fetchBusinessData();
       this.fetchSensorData();
@@ -279,7 +282,12 @@ export default {
     
     // 地块切换时更新数据
     onFarmChange(farmId) {
-      this.selectedFarm = this.farmList.find(f => f.id === farmId);
+      const found = this.farmList.find(f => f.id === farmId);
+      if (!found) {
+        console.warn('未找到匹配的地块, farmId:', farmId);
+        return;
+      }
+      this.selectedFarm = found;
       this.updateFarmSensorData();
     },
     
@@ -293,7 +301,8 @@ export default {
         : '/aether/device/new/status';
       
       try {
-        const res = await this.request.get(deviceEndpoint);
+        // 加 silentAuth + 8s 超时: OneNET 设备离线或慢时不要拖死整个首页
+        const res = await this.request.get(deviceEndpoint, { timeout: 8000, silentAuth: true });
         if (res.code === '200' && res.data) {
           // 直接使用传感器实时数据，不添加波动
           this.selectedFarm.temperature = res.data.temperature;
@@ -326,19 +335,21 @@ export default {
       }
       let i = 0;
       this.aiAdvice = "";
+      this.isTypingAdvice = true;
       this.typeWriterTimer = setInterval(() => {
         this.aiAdvice += text.charAt(i);
         i++;
         if (i >= text.length) {
           clearInterval(this.typeWriterTimer);
           this.typeWriterTimer = null;
+          this.isTypingAdvice = false;
         }
       }, 50);
     },
     async fetchBusinessData() {
       try {
         // 从销售数据获取收益
-        const salesRes = await this.request.get('/sales');
+        const salesRes = await this.request.get('/sales', { timeout: 8000, silentAuth: true });
         if (salesRes.code === '200' && salesRes.data && salesRes.data.length > 0) {
           this.totalRevenue = salesRes.data.reduce((sum, item) => {
             return sum + (parseFloat(item.price || 0) * parseFloat(item.number || 0));
@@ -357,7 +368,7 @@ export default {
     },
     async fetchSensorData() {
       try {
-        const res = await this.request.get('/aether/device/status');
+        const res = await this.request.get('/aether/device/status', { timeout: 8000, silentAuth: true });
         if (res.code === '200' && res.data) {
           this.deviceOnline = res.data.online;
           this.sensorData.temp = res.data.temperature || 25.6;
@@ -374,7 +385,7 @@ export default {
         if (type === 'light') {
           await this.request.post('/aether/device/control/led', { led: newState ? 1 : 0 });
         } else if (type === 'pump') {
-          await this.request.post('/aether/device/control/bump', { bump: newState });
+          await this.request.post('/aether/device/control/pump', { pump: newState });
         } else if (type === 'fan') {
           await this.request.post('/aether/device/control/fan', { fan: newState });
         }
@@ -393,11 +404,12 @@ export default {
      */
     async fetchAgriDailyReport() {
       this.reportLoading = true;
+      this.typeWriterEffect('智能农情日报正在生成，若 AI 或天气服务较慢会自动降级显示。');
       try {
         // 获取用户信息
         let userId = null;
         try {
-          const userStr = localStorage.getItem('user');
+          const userStr = getStoredUserRaw();
           if (userStr) {
             const user = JSON.parse(userStr);
             userId = user.id;
@@ -405,18 +417,24 @@ export default {
         } catch (e) { console.warn('获取用户信息失败', e) }
         
         // 调用农情日报API
+        // 修复: 加 8 秒单接口超时,AI 慢/未配置时立即降级
+        // 加 silentAuth: AI 接口 401 不要踢用户出登录(可能只是 AI Key 没配)
         const res = await this.request.get('/agri-report/daily', {
           params: {
             userId: userId
-          }
+          },
+          timeout: 8000,
+          silentAuth: true
         });
         
-        if (res.code === '200' && res.data) {
+        if (String(res.code) === '200' && res.data) {
           const data = res.data;
           
           // 更新AI建议文本
           if (data.aiAdvice) {
             this.typeWriterEffect(data.aiAdvice);
+          } else {
+            this.typeWriterEffect('今日农情日报暂未生成完整内容，其他看板功能可以正常使用。');
           }
           
           // 更新天气数据
@@ -447,8 +465,12 @@ export default {
         }
       } catch (e) {
         console.error('获取农情日报失败:', e);
-        // 使用默认文本
-        this.typeWriterEffect();
+        // 修复: 超时/失败时显示明确兜底,而非"正在加载..."骗用户继续等
+        const isTimeout = e && (e.code === 'ECONNABORTED' || /timeout/i.test(e.message || ''));
+        const fallback = isTimeout
+          ? '今日农情日报暂未生成(AI 服务响应较慢)。可前往「个人中心 → AI 模型配置」检查 Key,或稍后再试。'
+          : '今日农情日报暂未生成。当前可能是登录态过期、AI 配置缺失或后端接口返回失败；请重新登录后再试。';
+        this.typeWriterEffect(fallback);
       } finally {
         this.reportLoading = false;
       }
@@ -459,7 +481,7 @@ export default {
      */
     async fetchWeatherData() {
       try {
-        const res = await this.request.get('/aether/weather/now');
+        const res = await this.request.get('/aether/weather/now', { timeout: 8000, silentAuth: true });
         if (res.code === '200' && res.data && res.data.data) {
           const weatherInfo = res.data.data;
           this.currentTemp = weatherInfo.temp || '26';
@@ -620,25 +642,36 @@ export default {
 .farm-select {
   width: 200px;
 }
-.farm-select .el-input__inner {
+.farm-select .el-input__wrapper {
   border: 2px solid #e2e8f0;
   border-radius: 12px;
   background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  font-size: 16px;
-  font-weight: 700;
-  color: #1e293b;
-  padding: 8px 12px;
   height: 44px;
   transition: all 0.3s ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
-.farm-select .el-input__inner:hover {
+.farm-select .el-input__inner {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1e293b;
+  padding: 8px 12px;
+  height: 42px;
+  box-shadow: none;
+}
+.farm-select .el-input__wrapper:hover {
   border-color: #10b981;
   background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%);
 }
-.farm-select .el-input.is-focus .el-input__inner {
+.farm-select .el-input.is-focus .el-input__wrapper {
   border-color: #10b981;
   box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+.farm-select .el-input__inner:focus {
+  border: none;
+  box-shadow: none;
 }
 .farm-select .el-input__suffix {
   right: 8px;

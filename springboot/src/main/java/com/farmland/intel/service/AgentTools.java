@@ -99,7 +99,7 @@ public class AgentTools {
         return result.toString();
     }
 
-    @Tool(description = "获取 IoT 设备的实时状态，包括水泵、补光灯等")
+    @Tool(description = "获取 IoT 设备的实时状态，包括空气温湿度、土壤湿度(soil)、补光灯(led)、风扇(fan)、报警器(buzzer)、水泵(pump)等。风扇和报警器由单片机按温度/土壤自动控制，只读状态")
     public String getDeviceStatus() {
         if (oneNetService == null) {
             return "{\"error\": \"OneNET 服务不可用\"}";
@@ -384,10 +384,10 @@ public class AgentTools {
         }
         try {
             if ("on".equalsIgnoreCase(action)) {
-                oneNetService.controlBump(true);
+                oneNetService.controlPump(true);
                 return "{\"success\": true, \"action\": \"irrigation_on\", \"farm\": \"" + (farmName != null ? farmName : "默认农田") + "\"}";
             } else if ("off".equalsIgnoreCase(action)) {
-                oneNetService.controlBump(false);
+                oneNetService.controlPump(false);
                 return "{\"success\": true, \"action\": \"irrigation_off\", \"farm\": \"" + (farmName != null ? farmName : "默认农田") + "\"}";
             }
             return "{\"error\": \"无效操作: " + action + "\"}";

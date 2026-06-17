@@ -2,6 +2,7 @@ package com.farmland.intel.config;
 
 import com.farmland.intel.entity.SensorReading;
 import com.farmland.intel.entity.Statistic;
+import com.farmland.intel.event.SensorDataSyncedEvent;
 import com.farmland.intel.mapper.SensorReadingMapper;
 import com.farmland.intel.mapper.StatisticMapper;
 import com.farmland.intel.service.IOneNetService;
@@ -13,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -46,6 +48,17 @@ public class ScheduledTasks {
 
     @Autowired(required = false)
     private ISensorEventService sensorEventService;
+
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
+
+    @Autowired(required = false)
+    private com.farmland.intel.service.UserScoreService userScoreService;
+
+    private final AtomicBoolean scoring = new AtomicBoolean(false);
+
+    @Value("${score.enabled:true}")
+    private boolean scoreEnabled;
 
     @Value("${sensor.retention-days:90}")
     private int sensorRetentionDays;
@@ -110,6 +123,14 @@ public class ScheduledTasks {
             }
 
             detectSensorEvents();
+
+            // P1 改造: 发布事件,触发 AutoPatrolService 的事件驱动巡检
+            // 让规则引擎在传感器数据更新后立即响应,而不是等 30 分钟定时
+            try {
+                eventPublisher.publishEvent(new SensorDataSyncedEvent(this, "onenet"));
+            } catch (Exception e) {
+                log.debug("[事件发布] 传感器数据事件发布失败,不影响主同步: {}", e.getMessage());
+            }
         } else {
             log.debug("OneNET 服务未启用，跳过数据同步");
         }
@@ -220,7 +241,7 @@ public class ScheduledTasks {
 
             if (needIrrigation) {
                 log.info("[自动灌溉触发] 农田 [{}] 需要灌溉：{}", farm.getFarm(), reason);
-                boolean success = oneNetService.controlBump(true);
+                boolean success = oneNetService.controlPump(true);
                 if (success) {
                     pumpOnTimestamp = Instant.now().toEpochMilli();
                     log.info("[自动灌溉] 已开启水泵，为农田 [{}] 进行灌溉", farm.getFarm());
@@ -296,7 +317,7 @@ public class ScheduledTasks {
      * 关闭水泵
      */
     private void stopPump(String reason) {
-        boolean success = oneNetService.controlBump(false);
+        boolean success = oneNetService.controlPump(false);
         if (success) {
             pumpOnTimestamp = 0;
             log.info("[自动灌溉] 已关闭水泵，原因：{}", reason);
@@ -314,13 +335,13 @@ public class ScheduledTasks {
             if (oneNetService != null) {
                 Map<String, Object> pumpData = oneNetService.getNewDeviceData();
                 if ((Boolean) pumpData.getOrDefault("success", false)) {
-                    Object bumpState = pumpData.get("bump");
-                    if (bumpState instanceof Boolean) {
-                        return (Boolean) bumpState;
-                    } else if (bumpState instanceof Integer) {
-                        return ((Integer) bumpState) == 1;
-                    } else if (bumpState instanceof String) {
-                        return "true".equalsIgnoreCase((String) bumpState) || "1".equals(bumpState);
+                    Object pumpState = pumpData.get("pump");
+                    if (pumpState instanceof Boolean) {
+                        return (Boolean) pumpState;
+                    } else if (pumpState instanceof Integer) {
+                        return ((Integer) pumpState) == 1;
+                    } else if (pumpState instanceof String) {
+                        return "true".equalsIgnoreCase((String) pumpState) || "1".equals(pumpState);
                     }
                 }
             }
@@ -386,6 +407,30 @@ public class ScheduledTasks {
             }
         } catch (Exception e) {
             log.error("[数据清理] 清理传感器数据失败", e);
+        }
+    }
+
+    /**
+     * 每天 02:30 重算周滚动员工评分 (trailing-7-day 窗口, 每天产一行快照)。
+     * 仅评 ROLE_USER; 数字确定性算出, LLM 只补评语。scheduling.enabled=false 时整体不生效。
+     */
+    @Scheduled(cron = "${score.cron:0 30 2 * * ?}")
+    public void computeWeeklyScore() {
+        if (!scoreEnabled || userScoreService == null) {
+            log.debug("[周评分] 未启用或服务缺失, 跳过");
+            return;
+        }
+        if (!scoring.compareAndSet(false, true)) {
+            log.warn("[周评分] 上一次尚未完成, 跳过本次");
+            return;
+        }
+        try {
+            int n = userScoreService.computeAndPersistWindow();
+            log.info("[周评分] 完成, 评分 {} 名用户", n);
+        } catch (Exception e) {
+            log.error("[周评分] 计算失败", e);
+        } finally {
+            scoring.set(false);
         }
     }
 }

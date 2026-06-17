@@ -19,7 +19,7 @@
           <el-input v-model="form.confirmPassword" autocomplete="off" show-password placeholder="请再次输入新密码" />
         </el-form-item>
         <el-form-item class="actions-row">
-          <el-button type="primary" @click="save">确认修改</el-button>
+          <el-button type="primary" :loading="saving" @click="save">{{ saving ? '修改中...' : '确认修改' }}</el-button>
         </el-form-item>
       </el-form>
     </section>
@@ -46,15 +46,17 @@
 
 <script>
 import { useAppStore } from '@/store'
+import { getStoredUserRaw } from '@/utils/authStorage'
 
 export default {
   name: "Password",
   data() {
     return {
+      saving: false,
       form: {},
       user: (() => {
         try {
-          const s = localStorage.getItem("user")
+          const s = getStoredUserRaw()
           return s ? JSON.parse(s) : {}
         } catch (e) {
           return {}
@@ -88,13 +90,18 @@ export default {
             this.$message.error("两次输入的新密码不相同")
             return false
           }
+          this.saving = true;
           this.request.post("/user/password", this.form).then(res => {
-            if (res.code === '200') {
+            if (res.code === '200' || res.code === 200) {
               this.$message.success("修改成功")
               this.appStore.logout()
             } else {
-              this.$message.error(res.msg)
+              this.$message.error(res.msg || '修改失败，请稍后重试')
             }
+          }).catch(() => {
+            this.$message.error('网络错误，请检查网络连接后重试')
+          }).finally(() => {
+            this.saving = false;
           })
         }
       })

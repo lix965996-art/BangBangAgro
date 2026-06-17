@@ -87,31 +87,36 @@ import {
   Sell,
   User
 } from '@element-plus/icons-vue'
+import { getStoredUserRaw } from '@/utils/authStorage'
 
+// 主菜单顺序按"评委读得懂的故事主线"排:
+// 工作台(起点) → AI 农艺师(核心卖点) → 预警研判(闭环) → 3D 数字孪生(差异化)
+//             → 环境监测 → 视觉巡检 → 消息
 const mainMenus = [
-  { path: '/chat', icon: ChatDotSquare, title: '消息中心' },
-  { path: '/home', icon: HomeFilled, title: '首页总览' },
-  { path: '/aether-monitor', icon: Cpu, title: '环境监测与联动' },
-  { path: '/fruit-detect', icon: PictureRounded, title: '视觉巡检与异常识别' },
-  { path: '/farm-map-gaode', icon: MapLocation, title: 'GIS 地块指挥' },
+  { path: '/home', icon: HomeFilled, title: '工作台' },
+  { path: '/auto-patrol', icon: Connection, title: '无人农场指挥中心' },
+  { path: '/alert-center', icon: DataAnalysis, title: '预警研判中心' },
   { path: '/farmmap3d', icon: OfficeBuilding, title: '3D 数字孪生' },
-  { path: '/alert-center', icon: DataAnalysis, title: '预警与研判中心' },
-  { path: '/auto-patrol', icon: Connection, title: '无人农场·自主巡检' }
+  { path: '/aether-monitor', icon: Cpu, title: '环境监测' },
+  { path: '/fruit-detect', icon: PictureRounded, title: '视觉巡检' },
+  { path: '/chat', icon: ChatDotSquare, title: '消息中心' }
 ]
 
+// 二级"更多功能"按业务域分组,把使用频次较低或属性接近的兜底页放这里
 const supportGroups = [
   {
-    index: 'display',
-    title: '展示分析',
+    index: 'farm-data',
+    title: '农场数据',
     children: [
-      { path: '/dashbordnew', icon: DataLine, title: '环境监测大屏' },
+      { path: '/dashbordnew', icon: DataLine, title: '监测分析大屏' },
       { path: '/statistic', icon: PieChart, title: '地块数据总览' },
-      { path: '/farmland', icon: LocationInformation, title: '地块资产图谱' }
+      { path: '/farmland', icon: LocationInformation, title: '地块资产图谱' },
+      { path: '/farm-map-gaode', icon: MapLocation, title: 'GIS 农场地图' }
     ]
   },
   {
     index: 'business',
-    title: '业务协同',
+    title: '经营协同',
     children: [
       { path: '/supply-center', icon: Box, title: '供给协同中心' },
       { path: '/market-center', icon: Sell, title: '产销协同中心' }
@@ -164,7 +169,7 @@ export default {
   methods: {
     async fetchUnread() {
       // 未登录时不请求
-      if (!localStorage.getItem('user')) return
+      if (!getStoredUserRaw()) return
       try {
         const res = await this.request.get('/chat-message/unread')
         if (res && res.code === '200') {

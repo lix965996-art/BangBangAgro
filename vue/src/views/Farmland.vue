@@ -315,6 +315,7 @@
 <script>
 import FarmLocationSelector from '@/components/FarmLocationSelector.vue'
 import { assetUrl } from '@/utils/assetUrl'
+import { getStoredUserRaw } from '@/utils/authStorage'
 
 export default {
   name: "Farmland",
@@ -332,7 +333,7 @@ export default {
       dialogFormVisible: false,
       locationSelectorVisible: false,
       loading: false,
-      user: localStorage.getItem("user") ? JSON.parse(localStorage.getItem("user")) : {},
+      user: getStoredUserRaw() ? JSON.parse(getStoredUserRaw()) : {},
       searchTimer: null,
       
       // 表单验证规则

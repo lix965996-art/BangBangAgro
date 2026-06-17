@@ -227,9 +227,13 @@ public class InventoryController {
             List<Map<String, Object>> consumptionList = inventoryOutboundMapper.calculateDailyConsumptionBatch(
                 inventoryIds, startTime, endTime);
             for (Map<String, Object> row : consumptionList) {
-                Integer inventoryId = ((Number) row.get("inventory_id")).intValue();
-                Double consumption = ((Number) row.get("daily_consumption")).doubleValue();
-                dailyConsumptionMap.put(inventoryId, consumption);
+                Object idObj = row.get("inventory_id");
+                Object consumptionObj = row.get("daily_consumption");
+                if (idObj instanceof Number && consumptionObj instanceof Number) {
+                    Integer inventoryId = ((Number) idObj).intValue();
+                    Double consumption = ((Number) consumptionObj).doubleValue();
+                    dailyConsumptionMap.put(inventoryId, consumption);
+                }
             }
         }
         

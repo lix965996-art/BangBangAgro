@@ -15,7 +15,7 @@ public class SwaggerConfig {
                 .info(new Info()
                         .title("接口文档")
                         .description("Restful 接口")
-                        .contact(new Contact().name("xxx").email("xxx@qq.com"))
+                        .contact(new Contact().name("帮帮农团队").email("support@farmland-intel.com"))
                         .version("1.0"));
     }
 }

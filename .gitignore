@@ -9,6 +9,10 @@ dist_electron/
 target/
 bin/
 *.class
+*.tar.gz
+
+# Packaged installers / release artifacts
+最终EXE/
 
 # Logs and runtime files
 logs/
@@ -30,9 +34,27 @@ application-local.yml
 # IDE and OS files
 .idea/
 .vscode/
+.metals/
+.bloop/
+springboot/.bloop/
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Python cache
 __pycache__/
 *.py[cod]
+
+# Keil STM32 build intermediates
+ZET6/**/output/
+ZET6/**/Listings/
+ZET6/**/*.crf
+ZET6/**/*.o
+ZET6/**/*.d
+ZET6/**/*.axf
+ZET6/**/*.map
+ZET6/**/*.lst
+ZET6/**/*.lnp
+ZET6/**/*.dep
+ZET6/**/*.bak
+ZET6/**/*.uvguix*

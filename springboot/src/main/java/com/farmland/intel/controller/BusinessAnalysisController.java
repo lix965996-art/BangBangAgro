@@ -3,8 +3,8 @@ package com.farmland.intel.controller;
 import com.farmland.intel.common.Result;
 import com.farmland.intel.entity.CropYieldConfig;
 import com.farmland.intel.entity.Statistic;
-import com.farmland.intel.mapper.CropYieldConfigMapper;
-import com.farmland.intel.mapper.StatisticMapper;
+import com.farmland.intel.service.ICropYieldConfigService;
+import com.farmland.intel.service.IStatisticService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,18 +20,18 @@ import java.util.*;
 public class BusinessAnalysisController {
 
     @Autowired
-    private StatisticMapper statisticMapper;
+    private IStatisticService statisticService;
 
     @Autowired
-    private CropYieldConfigMapper cropYieldConfigMapper;
+    private ICropYieldConfigService cropYieldConfigService;
 
     /**
      * 获取所有农田的经营分析数据
      */
     @GetMapping("/all")
     public Result getAllBusinessAnalysis() {
-        List<Statistic> statistics = statisticMapper.selectList(null);
-        List<CropYieldConfig> configs = cropYieldConfigMapper.selectList(null);
+        List<Statistic> statistics = statisticService.list();
+        List<CropYieldConfig> configs = cropYieldConfigService.list();
 
         // 构建作物配置Map
         Map<String, CropYieldConfig> configMap = new HashMap<>();
@@ -69,12 +69,12 @@ public class BusinessAnalysisController {
      */
     @GetMapping("/farmland/{farmlandId}")
     public Result getFarmlandBusinessAnalysis(@PathVariable Integer farmlandId) {
-        Statistic statistic = statisticMapper.selectById(farmlandId);
+        Statistic statistic = statisticService.getById(farmlandId);
         if (statistic == null) {
             return Result.error("404", "农田不存在");
         }
 
-        List<CropYieldConfig> configs = cropYieldConfigMapper.selectList(null);
+        List<CropYieldConfig> configs = cropYieldConfigService.list();
         Map<String, CropYieldConfig> configMap = new HashMap<>();
         for (CropYieldConfig config : configs) {
             configMap.put(config.getCropName(), config);

@@ -1,0 +1,107 @@
+# ============================================================
+# 帮帮农智慧农业平台 - 一键启动
+# ============================================================
+# 启动: docker compose up -d
+# 停止: docker compose down
+# 查看日志: docker compose logs -f backend
+# ============================================================
+#
+# 启动后访问:
+#   - 后端 API:   http://localhost:9090
+#   - Swagger:    http://localhost:9090/swagger-ui/index.html
+#   - 健康检查:   http://localhost:9090/actuator/health
+#   - MySQL:      localhost:3306 (用户名: root, 密码: bangbangagro123)
+#
+# 4C 评委评测时只需要装 Docker,一行命令就能跑起来,不用配 Java / Maven / MySQL
+# ============================================================
+
+services:
+  # ============================================================
+  # MySQL 8.0 数据库
+  # ============================================================
+  mysql:
+    image: mysql:8.0
+    container_name: bangbangagro-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: bangbangagro123
+      MYSQL_DATABASE: smart-agriculture
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 启动时自动执行 init sql
+      - ./springboot/sql:/docker-entrypoint-initdb.d:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pbangbangagro123"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ============================================================
+  # Spring Boot 后端
+  # ============================================================
+  backend:
+    build:
+      context: ./springboot
+      dockerfile: Dockerfile
+    container_name: bangbangagro-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: smart-agriculture
+      DB_USERNAME: root
+      DB_PASSWORD: bangbangagro123
+      JWT_SECRET: ${JWT_SECRET:-please-change-this-in-production-with-a-random-string}
+      # 可选: 配置自己的 AI Key
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      AMAP_WEB_KEY: ${AMAP_WEB_KEY:-}
+      AMAP_JS_KEY: ${AMAP_JS_KEY:-}
+      # 巡检事件驱动(P1 改造)默认开启
+      PATROL_EVENT_DRIVEN_ENABLED: "true"
+      TZ: Asia/Shanghai
+    ports:
+      - "9090:9090"
+    volumes:
+      - backend-uploads:/root/smart-agriculture-uploads
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # ============================================================
+  # Python AI 检测服务 (可选)
+  # ============================================================
+  # 由于 YOLOv8 模型较大(>500MB),默认不构建。需要时取消注释。
+  # ai-detect:
+  #   build:
+  #     context: ./TomatoDetection
+  #   container_name: bangbangagro-ai
+  #   restart: unless-stopped
+  #   ports:
+  #     - "5000:5000"
+  #   environment:
+  #     TZ: Asia/Shanghai
+
+volumes:
+  mysql-data:
+    name: bangbangagro-mysql-data
+  backend-uploads:
+    name: bangbangagro-uploads
+
+networks:
+  default:
+    name: bangbangagro-network

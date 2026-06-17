@@ -19,7 +19,11 @@ import com.farmland.intel.service.IMenuService;
 import com.farmland.intel.service.IUserService;
 import com.farmland.intel.utils.PasswordUtils;
 import com.farmland.intel.utils.TokenUtils;
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
 import jakarta.annotation.Resource;
 import java.util.ArrayList;
@@ -39,18 +43,70 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     @Resource
     private IMenuService menuService;
 
+    @Resource
+    private RestTemplate restTemplate;
+
+    /** 高德 Web 服务 Key，用于 IP 归属地解析（复用项目已有高德配置） */
+    @Value("${amap.web-key:}")
+    private String amapWebKey;
+
     @Override
     public UserDTO login(UserDTO userDTO) {
+        return login(userDTO, null);
+    }
+
+    @Override
+    public UserDTO login(UserDTO userDTO, String clientIp) {
         User one = getUserInfo(userDTO);
         if (one == null) {
             throw new ServiceException(Constants.CODE_600, "用户名或密码错误");
         }
+
+        // 更新最后登录时间 + IP + 大致归属地
+        one.setLastLoginTime(new java.util.Date());
+        if (clientIp != null && !clientIp.isEmpty()) {
+            one.setLastLoginIp(clientIp);
+            one.setLastLoginRegion(resolveIpRegion(clientIp));  // 失败/内网返回 null，不影响登录
+        }
+        updateById(one);
 
         BeanUtil.copyProperties(one, userDTO, true);
         userDTO.setToken(TokenUtils.genToken(one.getId().toString()));
         userDTO.setPassword(null);
         userDTO.setMenus(getRoleMenus(one.getRole()));
         return userDTO;
+    }
+
+    /**
+     * 用高德 IP 定位把 IP 解析成大致归属地（省+市，城市级，可能不准）。
+     * 内网/本机 IP、未配高德 Key、或解析失败 → 返回 null，绝不抛异常影响登录。
+     */
+    private String resolveIpRegion(String ip) {
+        try {
+            if (ip == null) return null;
+            // 内网 / 本机 IP 高德无法定位，直接标注
+            if (ip.startsWith("127.") || ip.startsWith("192.168.") || ip.startsWith("10.")
+                    || ip.startsWith("172.") || "localhost".equalsIgnoreCase(ip) || ip.contains(":")) {
+                return "内网/本机";
+            }
+            if (amapWebKey == null || amapWebKey.isEmpty()) return null;
+
+            String url = "https://restapi.amap.com/v3/ip?ip=" + ip + "&key=" + amapWebKey;
+            String body = restTemplate.getForObject(url, String.class);
+            if (body == null) return null;
+            JSONObject json = JSONUtil.parseObj(body);
+            if (!"1".equals(json.getStr("status"))) return null;
+            // province/city 在内网或国外可能返回空数组 []，getStr 会得到 "[]"
+            String province = json.getStr("province");
+            String city = json.getStr("city");
+            if (province == null || province.isEmpty() || "[]".equals(province)) return null;
+            if (city == null || "[]".equals(city)) city = "";
+            String region = (province + city).trim();
+            return region.isEmpty() ? null : region;
+        } catch (Exception e) {
+            LOG.warn("IP 归属地解析失败: {}", e.getMessage());
+            return null;
+        }
     }
 
     @Override

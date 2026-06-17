@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/mini")
@@ -158,10 +159,7 @@ public class MiniProgramController {
         QueryWrapper<GroupBuyOrder> orderWrapper = new QueryWrapper<>();
         orderWrapper.eq("group_buy_id", id).orderByDesc("created_at");
         List<GroupBuyOrder> orders = groupBuyOrderService.list(orderWrapper);
-        return Result.success(new Object() {
-            public final Object groupBuy = groupBuy;
-            public final Object orders = orders;
-        });
+        return Result.success(Map.of("groupBuy", groupBuy, "orders", orders));
     }
 
     @AuthAccess

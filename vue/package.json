@@ -1,6 +1,6 @@
 {
-  "name": "vue",
-  "version": "0.2.0",
+  "name": "bangbangagro",
+  "version": "0.2.9",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "build:electron": "vite build --mode electron",
-    "electron:preview": "npm run build:electron && electron electron/main.js",
+    "electron:preview": "npm run build:electron && electron electron/main.cjs",
     "electron:icon": "node scripts/set-electron-icon.js",
     "electron:installer": "node scripts/make-installer.js",
     "electron:pack": "npm run build:electron && electron-builder --win --x64 --dir && npm run electron:icon && npm run electron:installer"
@@ -37,7 +37,7 @@
     "sharp": "^0.34.5",
     "vite": "^6.0.0"
   },
-  "main": "electron/main.js",
+  "main": "electron/main.cjs",
   "build": {
     "appId": "com.bangbangagro.desktop",
     "productName": "BangBangAgro",
@@ -62,10 +62,11 @@
         }
       ]
     },
+    "afterPack": "scripts/after-pack.cjs",
     "nsis": {
-      "oneClick": true,
-      "perMachine": true,
-      "allowToChangeInstallationDirectory": false,
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "deleteAppDataOnUninstall": false

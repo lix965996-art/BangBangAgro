@@ -224,11 +224,11 @@ export default {
       clockTimer: null,
       stm32Data: {
         device1: { temperature: null, humidity: null },
-        device2: { temperature: null, humidity: null, bump: false }
+        device2: { temperature: null, humidity: null, pump: false }
       },
       farmDeviceMap: {},
       cropConfig: {
-        wheat: { model: '/models/wheat.glb', scale: 3.0, color: 0xe6c658, fallback: 'spike', yOffset: 8.0 },
+        wheat: { model: '/models/wheat.glb', scale: 3.0, color: 0xe6c658, fallback: 'spike' },
         mugwort: { model: '/models/rhy.glb', scale: 6, color: 0x8BC34A, fallback: 'spike' },
         bamboo: { model: '/models/bamboo.glb', scale: 0.1, color: 0x4CAF50, fallback: 'spike' },
         maize: { model: '/models/maize.glb', scale: 6, color: 0xFFC107, fallback: 'column' },
@@ -600,7 +600,7 @@ export default {
         if (res2.code === '200' && res2.data) {
           this.stm32Data.device2.temperature = res2.data.temperature || 26;
           this.stm32Data.device2.humidity = res2.data.humidity || 55;
-          this.stm32Data.device2.bump = res2.data.bump || false;
+          this.stm32Data.device2.pump = res2.data.pump || false;
         }
       } catch (e) {
         console.warn('设备2数据获取失败', e);
@@ -859,8 +859,8 @@ export default {
     // 控制水泵开关（OneNET设备）
     async controlWaterPump(state) {
         try {
-            const res = await this.request.post('/aether/device/control/bump', {
-                bump: state
+            const res = await this.request.post('/aether/device/control/pump', {
+                pump: state
             });
             if (res.code === '200') {
                 // 4秒后自动关闭水泵
@@ -1150,10 +1150,13 @@ export default {
       this.controls.maxPolarAngle = Math.PI / 2.1;
 
       // ✨【灯光控制】
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.1); 
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.75); 
       this.scene.add(ambientLight);
+
+      const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x447744, 0.7);
+      this.scene.add(hemisphereLight);
       
-      const dirLight = new THREE.DirectionalLight(0xFFFEE0, 1.2); 
+      const dirLight = new THREE.DirectionalLight(0xFFFEE0, 2.0); 
       dirLight.position.set(80, 100, -50); 
       dirLight.castShadow = true;
       dirLight.shadow.mapSize.width = 2048;
@@ -1395,10 +1398,33 @@ export default {
             clone.rotation.y = Math.random() * Math.PI * 2;
             const s = scaleFactor * (0.8 + Math.random() * 0.4);
             clone.scale.set(s, s, s);
-            clone.traverse((node) => { if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; } });
+            clone.traverse((node) => {
+              if (node.isMesh) {
+                node.castShadow = true;
+                node.receiveShadow = true;
+                node.frustumCulled = false;
+                const materials = Array.isArray(node.material) ? node.material : [node.material];
+                materials.forEach((material) => {
+                  if (!material) return;
+                  material.side = THREE.DoubleSide;
+                  if ('metalness' in material) material.metalness = 0;
+                  if ('roughness' in material) material.roughness = Math.min(material.roughness || 0.8, 0.85);
+                  if ('emissive' in material) material.emissive = new THREE.Color(0x111111);
+                  material.needsUpdate = true;
+                });
+              }
+            });
+            this.placeObjectOnFarmSurface(clone, 0.52);
             parentMesh.add(clone);
          }
       }
+    },
+
+    placeObjectOnFarmSurface(object, surfaceY = 0.52) {
+      object.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(object);
+      if (!Number.isFinite(box.min.y)) return;
+      object.position.y += surfaceY - box.min.y;
     },
     
     addGeometricCrops(parentMesh, config, size, index = 0, totalCount = 1) {

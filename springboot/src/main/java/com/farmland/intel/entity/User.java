@@ -1,6 +1,7 @@
 package com.farmland.intel.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 
@@ -65,5 +66,28 @@ public class User implements Serializable {
 
     @Schema(description = "账号状态：0正常 1封禁")
     private Integer status;
+
+    @Schema(description = "最后登录时间")
+    private Date lastLoginTime;
+
+    @Schema(description = "最后登录IP")
+    private String lastLoginIp;
+
+    @Schema(description = "最后登录IP归属地(高德解析,城市级大致)")
+    private String lastLoginRegion;
+
+    @Schema(description = "安全问题")
+    private String securityQuestion;
+
+    @Schema(description = "安全问题答案")
+    private String securityAnswer;
+
+    @Schema(description = "周滚动评分总分 0-100 (透传, 非持久化)")
+    @TableField(exist = false)
+    private Double scoreTotal;
+
+    @Schema(description = "评级 S/A/B/C/D (透传, 非持久化)")
+    @TableField(exist = false)
+    private String scoreGrade;
 
 }

@@ -51,39 +51,45 @@
     </el-form>
   </el-card>
 
-  <!-- ── AI 模型配置卡片 ── -->
+  <!-- ── AI 模型配置 ── -->
   <el-card class="person-card ai-config-card">
     <template #header>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <i class="el-icon-cpu" style="color:#10b981;font-size:18px;"></i>
-        <span style="font-weight:600;">AI 模型配置</span>
-        <el-tag v-if="aiCfg.provider" size="mini" type="success" style="margin-left:auto;">
+      <div class="ai-config-head">
+        <div>
+          <div class="ai-config-title">
+            <i class="el-icon-cpu"></i>
+            <span>AI 模型配置</span>
+          </div>
+          <div class="ai-config-subtitle">填写主模型即可使用；对话模型留空时会自动复用主模型。</div>
+        </div>
+        <el-tag v-if="aiCfg.provider" size="small" type="success">
           {{ providerLabel(aiCfg.provider) }}
         </el-tag>
       </div>
     </template>
-    <el-form :model="aiCfg" label-width="90px" size="small">
+    <el-form :model="aiCfg" label-position="top" size="small" class="ai-config-form">
 
-      <!-- 提供商选择 -->
-      <el-form-item label="提供商">
-        <el-select v-model="aiCfg.provider" placeholder="选择提供商" style="width:100%;" @change="onProviderChange">
-          <el-option label="🌟 通义千问 (Qwen)"  value="qwen"></el-option>
-          <el-option label="🐋 DeepSeek"          value="deepseek"></el-option>
-          <el-option label="🤖 智谱 GLM"          value="glm"></el-option>
-          <el-option label="🔮 MiniMax"            value="minimax"></el-option>
-          <el-option label="🌐 OpenAI"             value="openai"></el-option>
-          <el-option label="⚙️ 自定义"             value="custom"></el-option>
-        </el-select>
-      </el-form-item>
+      <div class="ai-main-grid">
+        <el-form-item label="提供商">
+          <el-select v-model="aiCfg.provider" placeholder="选择提供商" @change="onProviderChange">
+            <el-option label="通义千问 (Qwen)" value="qwen"></el-option>
+            <el-option label="DeepSeek" value="deepseek"></el-option>
+            <el-option label="智谱 GLM" value="glm"></el-option>
+            <el-option label="MiniMax" value="minimax"></el-option>
+            <el-option label="OpenAI" value="openai"></el-option>
+            <el-option label="自定义" value="custom"></el-option>
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="模型">
+          <el-input v-model="aiCfg.modelName" placeholder="qwen-max / deepseek-chat"></el-input>
+        </el-form-item>
+      </div>
 
       <!-- Base URL -->
       <el-form-item label="Base URL">
         <el-input v-model="aiCfg.baseUrl" placeholder="https://api.xxx.com/v1"
-                  :disabled="aiCfg.provider !== 'custom'" clearable>
-          <template #append v-if="aiCfg.provider !== 'custom'">
-            <i class="el-icon-lock" title="预设地址，切换到「自定义」可修改"></i>
-          </template>
-        </el-input>
+                  :disabled="aiCfg.provider !== 'custom'" clearable></el-input>
       </el-form-item>
 
       <!-- API Key -->
@@ -92,43 +98,38 @@
                   show-password clearable autocomplete="new-password"></el-input>
       </el-form-item>
 
-      <!-- 模型名称 -->
-      <el-form-item label="模型">
-        <el-input v-model="aiCfg.modelName" placeholder="如 qwen-max / deepseek-chat">
-          <template #prepend><i class="el-icon-magic-stick"></i></template>
-        </el-input>
-      </el-form-item>
+      <el-collapse v-model="openAiSections" class="ai-advanced-collapse">
+        <el-collapse-item name="chat">
+          <template #title>
+            <span class="collapse-title">对话模型（可选）</span>
+          </template>
 
-      <!-- ── 对话模型（可选）── -->
-      <el-divider content-position="left">
-        <span style="font-size:12px;color:#909399;">💬 对话模型（可选，留空则复用上方主模型）</span>
-      </el-divider>
+          <div class="ai-advanced-grid">
+            <el-form-item label="对话模型">
+              <el-input v-model="aiCfg.chatModelName" placeholder="留空复用主模型" clearable></el-input>
+            </el-form-item>
 
-      <el-form-item label="对话模型">
-        <el-input v-model="aiCfg.chatModelName" placeholder="如 qwen-turbo / deepseek-chat（留空复用主模型）" clearable>
-          <template #prepend><i class="el-icon-chat-dot-round"></i></template>
-        </el-input>
-      </el-form-item>
+            <el-form-item label="对话 URL">
+              <el-input v-model="aiCfg.chatBaseUrl" placeholder="留空复用主模型 Base URL" clearable></el-input>
+            </el-form-item>
+          </div>
 
-      <el-form-item label="对话 URL">
-        <el-input v-model="aiCfg.chatBaseUrl" placeholder="留空则复用主模型 Base URL" clearable></el-input>
-      </el-form-item>
+          <el-form-item label="对话 Key">
+            <el-input v-model="aiCfg.chatApiKey" placeholder="留空复用主模型 API Key"
+                      show-password clearable autocomplete="new-password"></el-input>
+          </el-form-item>
+        </el-collapse-item>
+      </el-collapse>
 
-      <el-form-item label="对话 Key">
-        <el-input v-model="aiCfg.chatApiKey" placeholder="留空则复用主模型 API Key"
-                  show-password clearable autocomplete="new-password"></el-input>
-      </el-form-item>
-
-      <!-- 操作按钮 -->
-      <el-form-item>
-        <el-button type="primary" :loading="aiSaving" @click="saveAiConfig">保 存</el-button>
-        <el-button :loading="aiTesting" @click="testAiConnection" style="margin-left:10px;">
+      <div class="ai-actions">
+        <el-button type="primary" :loading="aiSaving" @click="saveAiConfig">保存</el-button>
+        <el-button :loading="aiTesting" @click="testAiConnection">
           <i class="el-icon-connection"></i> 测试主模型
         </el-button>
-        <el-button :loading="aiTestingChat" @click="testChatConnection" style="margin-left:10px;">
+        <el-button :loading="aiTestingChat" @click="testChatConnection">
           <i class="el-icon-chat-line-round"></i> 测试对话模型
         </el-button>
-      </el-form-item>
+      </div>
 
     </el-form>
   </el-card>
@@ -136,12 +137,14 @@
 </template>
 
 <script>
+import { getStoredUserRaw, setStoredUser } from '@/utils/authStorage'
+
 export default {
   name: "Person",
   data() {
     let user = {};
     try {
-      const userStr = localStorage.getItem("user");
+      const userStr = getStoredUserRaw();
       user = userStr ? JSON.parse(userStr) : {};
     } catch (e) {
       console.error('解析用户信息失败:', e);
@@ -165,6 +168,7 @@ export default {
       aiSaving: false,
       aiTesting: false,
       aiTestingChat: false,
+      openAiSections: [],
     }
   },
   created() {
@@ -178,7 +182,7 @@ export default {
     },
     uploadHeaders() {
       try {
-        const userStr = localStorage.getItem("user")
+        const userStr = getStoredUserRaw()
         const user = userStr ? JSON.parse(userStr) : null
         return user && user.token ? { token: user.token } : {}
       } catch (e) {
@@ -209,10 +213,10 @@ export default {
 
           // 更新浏览器存储的用户信息
           this.getUser().then(res => {
-            const stored = localStorage.getItem("user");
+            const stored = getStoredUserRaw();
             const currentUser = stored ? JSON.parse(stored) : {};
             res.token = currentUser.token || '';
-            localStorage.setItem("user", JSON.stringify(res))
+            setStoredUser(res)
           })
 
         } else {
@@ -352,35 +356,181 @@ export default {
 <style>
 .person-page {
   width: 100%;
+  max-width: none;
+  margin: 0;
   padding: 24px 32px;
   display: grid;
-  grid-template-columns: minmax(520px, 0.92fr) minmax(560px, 1.08fr);
-  gap: 24px;
+  grid-template-columns: 400px minmax(0, 1fr);
+  gap: 20px;
   align-items: start;
+  justify-content: stretch;
 }
 
 .person-card {
   width: 100%;
   margin: 0;
+  border: 1px solid #edf2ee !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04) !important;
+  overflow: hidden;
+}
+
+.person-card .el-card__body {
+  padding: 24px !important;
 }
 
 .ai-config-card {
   margin-top: 0;
 }
 
+.ai-config-card .el-card__header {
+  padding: 18px 24px !important;
+  background: #f7fbf8 !important;
+  border-bottom: 1px solid #e8f1eb !important;
+}
+
+.ai-config-card .el-card__body {
+  padding: 24px !important;
+}
+
+.ai-config-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ai-config-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #1f3d2b;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.ai-config-title i {
+  color: #10b981;
+  font-size: 18px;
+}
+
+.ai-config-subtitle {
+  margin-top: 5px;
+  color: #7b8794;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ai-config-form .el-form-item {
+  margin-bottom: 16px;
+}
+
+.ai-config-form .el-form-item__label {
+  padding-bottom: 5px !important;
+  color: #4f6b58 !important;
+  font-weight: 700 !important;
+}
+
+.ai-main-grid,
+.ai-advanced-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.person-page .el-input__wrapper,
+.person-page .el-select .el-input__wrapper,
+.person-page .el-textarea__inner {
+  border: 1px solid #dfe7e2 !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+  background: #fff !important;
+}
+
+.person-page .el-input__wrapper:hover,
+.person-page .el-select .el-input__wrapper:hover,
+.person-page .el-textarea__inner:hover {
+  border-color: #a8d8b2 !important;
+}
+
+.person-page .el-input__wrapper.is-focus,
+.person-page .el-select .el-input__wrapper.is-focus,
+.person-page .el-textarea__inner:focus {
+  border-color: #42b883 !important;
+}
+
+body .person-page .el-input__inner,
+body .person-page .el-input__inner:focus,
+body .person-page .el-select .el-input__inner,
+body .person-page .el-select .el-input.is-focus .el-input__inner {
+  border: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+}
+
+.ai-config-form .el-input__wrapper,
+.ai-config-form .el-select .el-input__wrapper {
+  min-height: 36px;
+}
+
+.ai-advanced-collapse {
+  margin: 2px 0 20px;
+  border: 1px solid #e8f1eb;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fbfdfb;
+}
+
+.ai-advanced-collapse .el-collapse-item__header {
+  height: 42px;
+  padding: 0 14px;
+  background: #fbfdfb;
+  border-bottom: none;
+  color: #5f6f65;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ai-advanced-collapse .el-collapse-item__wrap {
+  border-top: 1px solid #edf3ef;
+  border-bottom: none;
+}
+
+.ai-advanced-collapse .el-collapse-item__content {
+  padding: 14px 14px 2px;
+}
+
+.collapse-title {
+  color: #516358;
+}
+
+.ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding-top: 0;
+}
+
+.ai-actions .el-button {
+  margin-left: 0 !important;
+}
+
 .avatar-uploader {
   text-align: center;
-  padding-bottom: 10px;
+  padding-bottom: 14px;
 }
 .avatar-uploader .el-upload {
-  border: 1px dashed #d9d9d9;
-  border-radius: 6px;
+  border: none;
+  border-radius: 12px;
   cursor: pointer;
   position: relative;
   overflow: hidden;
+  box-shadow: none;
 }
 .avatar-uploader .el-upload:hover {
-  border-color: #409EFF;
+  box-shadow: none;
 }
 .avatar-uploader-icon {
   font-size: 28px;
@@ -391,10 +541,11 @@ export default {
   text-align: center;
 }
 .avatar {
-  width: 138px;
-  height: 138px;
+  width: 150px;
+  height: 150px;
   object-fit: cover;
   display: block;
+  border-radius: 12px;
 }
 
 .uid-row {
@@ -441,9 +592,22 @@ export default {
     padding: 16px;
     grid-template-columns: 1fr;
   }
+
+  .ai-main-grid,
+  .ai-advanced-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
 }
 
 @media (max-width: 1200px) {
+  .person-page {
+    grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+    padding: 20px;
+  }
+}
+
+@media (max-width: 980px) {
   .person-page {
     grid-template-columns: 1fr;
   }

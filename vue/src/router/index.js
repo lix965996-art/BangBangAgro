@@ -1,7 +1,63 @@
 import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
 import { useAppStore } from '@/store'
+import {
+  clearStoredAuth,
+  getStoredMenusRaw,
+  getStoredUserRaw,
+  purgeLegacyAuth,
+  setCurrentPathName
+} from '@/utils/authStorage'
+
+function decodeJwtPayload(token) {
+  const payload = token.split('.')[1]
+  const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), '=')
+  const json = atob(padded)
+  try {
+    return JSON.parse(decodeURIComponent(escape(json)))
+  } catch (e) {
+    return JSON.parse(json)
+  }
+}
+
+function hasUsableToken(user) {
+  if (!user || !user.token || typeof user.token !== 'string') {
+    return false
+  }
+  if (user.token.split('.').length !== 3) {
+    return false
+  }
+  try {
+    const payload = decodeJwtPayload(user.token)
+    return !payload.exp || payload.exp * 1000 > Date.now()
+  } catch (e) {
+    return false
+  }
+}
+
+const ResetAuthPage = {
+  name: 'ResetAuth',
+  mounted() {
+    clearStoredAuth()
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.getRegistrations()
+        .then(registrations => Promise.all(registrations.map(item => item.unregister())))
+        .finally(() => {
+          window.location.replace('/login')
+        })
+      return
+    }
+    window.location.replace('/login')
+  },
+  template: '<div style="padding:24px;font-family:sans-serif;">正在清理登录缓存...</div>'
+}
 
 const baseRoutes = [
+  {
+    path: '/reset-auth',
+    name: 'ResetAuth',
+    component: ResetAuthPage
+  },
   {
     path: '/login',
     name: 'Login',
@@ -29,7 +85,7 @@ const staticManageChildren = [
   { path: 'farm-map-gaode', name: 'FarmMapGaode', component: () => import('../views/FarmMapGaode.vue') },
   { path: 'farmmap3d', name: 'FarmMap3D', component: () => import('../views/FarmMap3D.vue') },
   { path: 'alert-center', name: '预警与研判中心', component: () => import('../views/BusinessAnalysis.vue') },
-  { path: 'auto-patrol', name: '无人农场·自主巡检', component: () => import('../views/AutoPatrol.vue') },
+  { path: 'auto-patrol', name: '无人农场指挥中心', component: () => import('../views/AutoPatrol.vue') },
   { path: 'unmanned-dashboard', name: '无人农场总控仪表盘', component: () => import('../views/UnmannedFarmDashboard.vue') },
   { path: 'business-analysis', redirect: '/alert-center' },
   { path: 'dashbordnew', name: '监测分析看板', component: () => import('../views/DashbordNew.vue') },
@@ -37,17 +93,16 @@ const staticManageChildren = [
   { path: 'farmland', name: '地块资产图谱', component: () => import('../views/Farmland.vue') },
   { path: 'supply-center', name: '供给协同中心', component: () => import('../views/SupplyCenter.vue') },
   { path: 'market-center', name: '产销协同中心', component: () => import('../views/MarketCenter.vue') },
+  // 旧供应链路径兼容: 跳转到聚合后的新页面
   { path: 'inventory', redirect: '/supply-center' },
   { path: 'purchase', redirect: '/supply-center' },
   { path: 'sales', redirect: '/market-center' },
   { path: 'online-sale', redirect: '/market-center' },
   { path: 'notice', name: '系统公告', component: () => import('../views/Notice.vue') },
   { path: 'user', name: '用户管理', component: () => import('../views/User.vue') },
-  { path: 'role', name: '数据报表中心', component: () => import('../views/Role.vue') },
-  { path: 'iot-dashboard', name: '总控页（备用）', component: () => import('../views/iot/IoTDashboard.vue') },
-  { path: 'iot-monitor', name: '监测页（备用）', component: () => import('../views/iot/IoTMonitor.vue') },
-  { path: 'iot-vision', name: '巡检页（备用）', component: () => import('../views/iot/IoTVision.vue') },
-  { path: 'iot-alert-center', name: '闭环页（备用）', component: () => import('../views/iot/IoTAlertCenter.vue') }
+  { path: 'role', name: '数据报表中心', component: () => import('../views/Role.vue') }
+  // 已清理: iot/ 子目录的 4 个备用页面(IoTDashboard / IoTMonitor / IoTVision / IoTAlertCenter)
+  // 已清理: 4 个旧供应链页面文件(Inventory / Purchase / Sales / OnlineSale),路径通过上方 redirect 兼容
 ]
 
 const viewModules = import.meta.glob('../views/**/*.vue')
@@ -96,7 +151,7 @@ export const setRoutes = () => {
     dynamicRouteNames.add('Manage')
   }
 
-  const storeMenus = localStorage.getItem('menus')
+  const storeMenus = getStoredMenusRaw()
   if (!storeMenus) {
     return
   }
@@ -163,27 +218,34 @@ export const setRoutes = () => {
 }
 
 // 仅在已登录状态下初始化路由（页面刷新场景）
-const storedMenus = localStorage.getItem('menus')
+purgeLegacyAuth()
+
+const storedMenus = getStoredMenusRaw()
 if (storedMenus) {
   setRoutes()
 }
 
 router.beforeEach((to, from, next) => {
-  localStorage.setItem('currentPathName', to.name || '')
+  if (to.path === '/reset-auth') {
+    next()
+    return
+  }
+
+  setCurrentPathName(to.name || '')
   const store = useAppStore()
   store.setPath()
 
   // 公开页面无需认证
-  const publicPages = ['/login', '/register', '/404']
+  const publicPages = ['/login', '/register', '/404', '/reset-auth']
   const isPublic = publicPages.includes(to.path)
 
   // 检查 token 是否存在
   let hasToken = false
   try {
-    const userStr = localStorage.getItem('user')
+    const userStr = getStoredUserRaw()
     if (userStr) {
       const user = JSON.parse(userStr)
-      hasToken = !!(user && user.token)
+      hasToken = hasUsableToken(user)
     }
   } catch (e) {
     hasToken = false
@@ -191,18 +253,29 @@ router.beforeEach((to, from, next) => {
 
   if (!isPublic && !hasToken) {
     // 未登录访问受保护页面，清除残留数据并跳转登录
-    localStorage.removeItem('user')
-    localStorage.removeItem('menus')
+    clearStoredAuth()
     next('/login')
     return
   }
 
   if (!to.matched.length) {
-    const menus = localStorage.getItem('menus')
+    const menus = getStoredMenusRaw()
     if (!menus) {
       next('/login')
     } else {
-      setRoutes()
+      // 死循环修复: 重定向前记录是否已尝试过,setRoutes 失败时不再无限重试
+      if (from.fullPath === to.fullPath) {
+        console.warn('[Router] 重复匹配失败,跳 404 防止死循环')
+        next('/404')
+        return
+      }
+      try {
+        setRoutes()
+      } catch (e) {
+        console.error('[Router] setRoutes 失败:', e)
+        next('/login')
+        return
+      }
       next({ ...to, replace: true })
     }
   } else {

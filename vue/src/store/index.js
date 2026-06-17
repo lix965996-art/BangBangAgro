@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import router, { resetRouter } from '@/router'
+import { clearStoredAuth, getCurrentPathName } from '@/utils/authStorage'
 
 export const useAppStore = defineStore('app', {
   state: () => ({
@@ -7,12 +8,11 @@ export const useAppStore = defineStore('app', {
   }),
   actions: {
     setPath() {
-      this.currentPathName = localStorage.getItem('currentPathName') || ''
+      this.currentPathName = getCurrentPathName()
     },
     async logout() {
       this.setPath()
-      localStorage.removeItem('user')
-      localStorage.removeItem('menus')
+      clearStoredAuth()
       await router.push('/login')
       resetRouter()
     }

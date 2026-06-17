@@ -95,6 +95,58 @@
       </el-col>
     </el-row>
 
+    <el-row :gutter="16" class="metrics-row device-row">
+      <el-col :span="8">
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-icon">🌾</span>
+            <span class="metric-label">土壤湿度</span>
+            <span class="status-indicator" :class="soil !== null && soil <= soilThresholdLow ? 'warning' : 'normal'"></span>
+          </div>
+          <div class="metric-value">
+            {{ soil === null ? '--' : soil }}<span class="unit">%</span>
+          </div>
+          <div class="metric-desc">
+            土壤传感器（PA4）·
+            <template v-if="soil === null">等待上报</template>
+            <template v-else-if="soil <= soilThresholdLow">偏干，注意灌溉</template>
+            <template v-else>湿度正常</template>
+          </div>
+        </div>
+      </el-col>
+
+      <el-col :span="8">
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-icon">🌀</span>
+            <span class="metric-label">风扇状态</span>
+            <span class="status-indicator" :class="fanOn ? 'normal' : 'inactive'"></span>
+          </div>
+          <div class="metric-value status-text" :class="{ on: fanOn }">
+            {{ fanOn ? '运行中' : '已停止' }}
+          </div>
+          <div class="metric-desc">设备按温度自动调控（≥30℃ 开 / ≤28℃ 关）</div>
+        </div>
+      </el-col>
+
+      <el-col :span="8">
+        <div class="metric-card" :class="{ 'metric-card--alarm': buzzerOn }">
+          <div class="metric-header">
+            <span class="metric-icon">🚨</span>
+            <span class="metric-label">报警器</span>
+            <span class="status-indicator" :class="buzzerOn ? 'warning' : 'inactive'"></span>
+          </div>
+          <div class="metric-value status-text" :class="{ alarm: buzzerOn }">
+            {{ buzzerOn ? '报警中' : '正常' }}
+          </div>
+          <div class="metric-desc">
+            <template v-if="buzzerOn">{{ buzzerAlert }}</template>
+            <template v-else>高温(≥35℃) 或 土壤过干(≤25%) 自动鸣响</template>
+          </div>
+        </div>
+      </el-col>
+    </el-row>
+
     <el-row :gutter="12" class="weather-row" style="max-height: 240px;">
       <el-col :span="16">
         <el-card class="weather-forecast-card" style="max-height: 240px; overflow: hidden;">
@@ -188,7 +240,14 @@
                 <div class="alert-desc">{{ humiAlert }}</div>
               </div>
             </div>
-            <el-empty v-if="!weatherAlerts.length && !tempAlert && !humiAlert" description="系统运转平稳" :image-size="60"></el-empty>
+            <div v-if="buzzerOn" class="alert-item danger">
+              <i class="el-icon-warning"></i>
+              <div class="alert-content">
+                <div class="alert-title">🚨 现场报警器触发</div>
+                <div class="alert-desc">{{ buzzerAlert || '硬件报警器正在鸣响' }}</div>
+              </div>
+            </div>
+            <el-empty v-if="!weatherAlerts.length && !tempAlert && !humiAlert && !buzzerOn" description="系统运转平稳" :image-size="60"></el-empty>
           </div>
         </el-card>
       </el-col>
@@ -214,7 +273,15 @@
             <h3 class="panel-title">智能告警中心</h3>
           </div>
           <div class="alert-timeline">
-            <div v-if="tempAlert || humiAlert || weatherAlerts.length" class="timeline-items">
+            <div v-if="tempAlert || humiAlert || buzzerOn || weatherAlerts.length" class="timeline-items">
+              <div v-if="buzzerOn" class="timeline-item danger">
+                <div class="timeline-dot"></div>
+                <div class="timeline-content">
+                  <div class="timeline-time">{{ getCurrentTime() }}</div>
+                  <div class="timeline-title">🚨 报警器触发</div>
+                  <div class="timeline-desc">{{ buzzerAlert || '硬件报警器正在鸣响' }}</div>
+                </div>
+              </div>
               <div v-if="tempAlert" class="timeline-item warning">
                 <div class="timeline-dot"></div>
                 <div class="timeline-content">
@@ -261,6 +328,11 @@ export default {
       deviceOnline: false,
       temperature: null,
       humidity: null,
+      soil: null,
+      fanOn: false,
+      buzzerOn: false,
+      soilThresholdLow: 25,
+      buzzerAlert: '',
       ledOn: false,
       weatherNow: null,
       weather24h: [],
@@ -349,6 +421,9 @@ export default {
           this.deviceOnline = data.online;
           this.temperature = data.temperature;
           this.humidity = data.humidity;
+          this.soil = (data.soil === undefined || data.soil === null) ? null : data.soil;
+          this.fanOn = data.fan === true || data.fan === 1;
+          this.buzzerOn = data.buzzer === true || data.buzzer === 1;
           this.ledOn = data.led === 1;
           this.checkThresholds();
         }
@@ -393,6 +468,15 @@ export default {
     checkThresholds() {
       this.tempAlert = '';
       this.humiAlert = '';
+      // 硬件报警器：由单片机按高温(≥35℃)或土壤过干(≤25%)自动触发，这里只做原因解释
+      if (this.buzzerOn) {
+        const reasons = [];
+        if (this.temperature !== null && this.temperature >= 35) reasons.push(`高温 ${this.temperature}℃`);
+        if (this.soil !== null && this.soil <= this.soilThresholdLow) reasons.push(`土壤过干 ${this.soil}%`);
+        this.buzzerAlert = reasons.length ? `触发原因：${reasons.join('、')}` : '现场报警器正在鸣响';
+      } else {
+        this.buzzerAlert = '';
+      }
       if (this.temperature !== null) {
         if (this.temperature > this.tempThresholdHigh) {
           this.tempAlert = `当前温度 ${this.temperature}℃ 超过上限 ${this.tempThresholdHigh}℃`;
@@ -656,6 +740,21 @@ export default {
   min-height: 36px;
 }
 .metric-card--light .metric-desc { min-height: 32px; }
+
+/* 设备状态行（土壤 / 风扇 / 报警器） */
+.device-row { margin-top: -8px; }
+.status-text { font-size: 22px; font-weight: 800; color: #6b7280; }
+.status-text.on { color: #059669; }
+.status-text.alarm { color: #ef4444; }
+.metric-card--alarm {
+  border-color: #fecaca !important;
+  background: #fef2f2;
+  animation: alarmPulse 1.5s infinite;
+}
+@keyframes alarmPulse {
+  0%, 100% { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); }
+  50% { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.15); }
+}
 
 .weather-row { margin-bottom: 4px; display: flex; align-items: stretch; }
 .weather-row .el-col { display: flex; }

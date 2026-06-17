@@ -133,7 +133,22 @@ public class OneNetServiceImpl implements IOneNetService {
         String s = id.trim().toLowerCase(Locale.ROOT);
         return "humi".equals(s) || "humidity".equals(s) || "air_humidity".equals(s);
     }
-    
+
+    /** soil、soilhumidity、soil_humidity（大小写不敏感） */
+    private static boolean isSoilIdentifier(String id) {
+        if (id == null) return false;
+        String s = id.trim().toLowerCase(Locale.ROOT);
+        return "soil".equals(s) || "soilhumidity".equals(s) || "soil_humidity".equals(s);
+    }
+
+    /** 把 OneNET 返回的布尔值（可能是 Boolean / "true" / 1）统一解析为 boolean */
+    private static boolean parseBool(Object v) {
+        if (v == null) return false;
+        if (v instanceof Boolean) return (Boolean) v;
+        String s = v.toString().trim();
+        return "true".equalsIgnoreCase(s) || "1".equals(s);
+    }
+
     @Override
     public Map<String, Object> getDeviceData() {
         Map<String, Object> result = new HashMap<>();
@@ -175,7 +190,8 @@ public class OneNetServiceImpl implements IOneNetService {
                     log.warn("[OneNET调试] 数据列表长度: {}", dataList.size());
 
                     // 按标识符匹配数据，不依赖顺序
-                    Map<String, Object> tempItem = null, humiItem = null, ledItem = null;
+                    Map<String, Object> tempItem = null, humiItem = null, ledItem = null,
+                                        soilItem = null, fanItem = null, buzzerItem = null;
                     for (Map<String, Object> item : dataList) {
                         if (item == null) { log.warn("[OneNET 调试] 跳过 null 数据项"); continue; }
                         String id = (String) item.get("identifier");
@@ -183,12 +199,18 @@ public class OneNetServiceImpl implements IOneNetService {
                         log.warn("[OneNET调试] identifier={}, value={}", id, item.get("value"));
                         if (isTempIdentifier(id)) tempItem = item;
                         else if (isHumiIdentifier(id)) humiItem = item;
+                        else if (isSoilIdentifier(id)) soilItem = item;
                         else if ("led".equalsIgnoreCase(id)) ledItem = item;
+                        else if ("fan".equalsIgnoreCase(id)) fanItem = item;
+                        else if ("buzzer".equalsIgnoreCase(id)) buzzerItem = item;
                     }
 
                     Object tempVal = tempItem != null ? tempItem.get("value") : null;
                     Object humiVal = humiItem != null ? humiItem.get("value") : null;
                     Object ledVal = ledItem != null ? ledItem.get("value") : null;
+                    Object soilVal = soilItem != null ? soilItem.get("value") : null;
+                    Object fanVal = fanItem != null ? fanItem.get("value") : null;
+                    Object buzzerVal = buzzerItem != null ? buzzerItem.get("value") : null;
 
                     // 通过独立API查询设备真实在线状态
                     boolean online = queryDeviceOnlineStatus(productId, deviceName);
@@ -202,12 +224,25 @@ public class OneNetServiceImpl implements IOneNetService {
                             else ledState = "true".equals(ledVal.toString()) ? 1 : 0;
                         }
 
-                        log.warn("[OneNET] 真实数据 - 温度: {}℃, 湿度: {}%, LED: {}, 在线: {}", temperature, humidity, ledState, online);
                         result.put("success", true);
                         result.put("temperature", temperature);
                         result.put("humidity", humidity);
                         result.put("led", ledState);
                         result.put("online", online);
+
+                        // 土壤湿度 / 风扇 / 蜂鸣器：仅在设备实际上报时写入，避免老固件被误判为 0
+                        Integer soilPercent = null;
+                        if (soilVal != null) {
+                            soilPercent = (int) Math.round(Double.parseDouble(soilVal.toString()));
+                            result.put("soil", soilPercent);
+                        }
+                        Boolean fanState = fanVal != null ? parseBool(fanVal) : null;
+                        if (fanState != null) result.put("fan", fanState);
+                        Boolean buzzerState = buzzerVal != null ? parseBool(buzzerVal) : null;
+                        if (buzzerState != null) result.put("buzzer", buzzerState);
+
+                        log.warn("[OneNET] 真实数据 - 温度: {}℃, 湿度: {}%, 土壤: {}%, LED: {}, 风扇: {}, 报警器: {}, 在线: {}",
+                                temperature, humidity, soilPercent, ledState, fanState, buzzerState, online);
                     } else {
                         // 不再用随机数冒充实时值（会导致界面与真实传感器完全不符）
                         log.warn("[OneNET] 未解析到有效温湿度（请确认物模型属性标识符为 temp/humi 或 temperature/humidity，且设备已上报）。在线: {}", online);
@@ -284,12 +319,16 @@ public class OneNetServiceImpl implements IOneNetService {
                 reading.setTemperature((Double) data.get("temperature"));
                 reading.setHumidity((Double) data.get("humidity"));
                 reading.setLed((Integer) data.get("led"));
+                Object soil = data.get("soil");
+                if (soil != null) reading.setSoilHumidity((int) Math.round(Double.parseDouble(soil.toString())));
+                if (data.get("fan") != null) reading.setFan(parseBool(data.get("fan")) ? 1 : 0);
+                if (data.get("buzzer") != null) reading.setBuzzer(parseBool(data.get("buzzer")) ? 1 : 0);
                 reading.setDeviceName("STM32-001");
                 reading.setCreatedAt(LocalDateTime.now());
-                
+
                 sensorReadingMapper.insert(reading);
-                
-                log.debug("[定时任务] STM32数据已同步到数据库: T={}℃, H={}%", reading.getTemperature(), reading.getHumidity());
+
+                log.debug("[定时任务] STM32数据已同步到数据库: T={}℃, H={}%, Soil={}%", reading.getTemperature(), reading.getHumidity(), reading.getSoilHumidity());
                 return true;
             } else {
                 log.warn("[定时任务] 获取设备数据失败，无法同步");
@@ -302,31 +341,31 @@ public class OneNetServiceImpl implements IOneNetService {
     }
 
 @Override
-public boolean controlBump(boolean bump) {
+public boolean controlPump(boolean pump) {
     try {
         String url = apiUrl + "/thingmodel/set-device-property";
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("authorization", generateToken());
-        
+
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("product_id", newProductId);  // 使用新设备的product_id
         requestBody.put("device_name", newDeviceName);
-        
+
         Map<String, Object> params = new HashMap<>();
-        params.put("bump", bump);  // 水泵控制参数
+        params.put("bump", pump);  // 水泵控制参数（OneNET硬件协议保留bump字段名）
         requestBody.put("params", params);
-        
+
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
-        
-        log.debug("正在控制水泵: {} -> {}", newProductId, bump ? "开启" : "关闭");
-        
+
+        log.debug("正在控制水泵: {} -> {}", newProductId, pump ? "开启" : "关闭");
+
         ResponseEntity<Map<String, Object>> response = exchangeForMap(url, HttpMethod.POST, entity);
-        
+
         boolean success = response.getStatusCode() == HttpStatus.OK;
         if (success) {
-            log.debug("OneNET 水泵控制成功: {}", bump ? "开启" : "关闭");
+            log.debug("OneNET 水泵控制成功: {}", pump ? "开启" : "关闭");
         } else {
             log.warn("OneNET 水泵控制失败，状态码: {}", response.getStatusCode());
         }
@@ -369,15 +408,15 @@ public Map<String, Object> getNewDeviceData() {
                 if (dataList.size() >= 4) {
                     Double temperature = round(Double.parseDouble(dataList.get(3).get("value").toString()), 1);
                     Double humidity = round(Double.parseDouble(dataList.get(1).get("value").toString()), 1);
-                    boolean bumpState = "true".equals(dataList.get(0).get("value").toString());
+                    boolean pumpState = "true".equals(dataList.get(0).get("value").toString());
                     boolean ledState = "true".equals(dataList.get(2).get("value").toString());
 
-                    log.debug("新设备数据解析成功 - 温度: {}℃, 湿度: {}%, 水泵: {}, 在线: {}", temperature, humidity, bumpState ? "开" : "关", online);
+                    log.debug("新设备数据解析成功 - 温度: {}℃, 湿度: {}%, 水泵: {}, 在线: {}", temperature, humidity, pumpState ? "开" : "关", online);
 
                     result.put("success", true);
                     result.put("temperature", temperature);
                     result.put("humidity", humidity);
-                    result.put("bump", bumpState);
+                    result.put("pump", pumpState);
                     result.put("led", ledState);
                     result.put("online", online);
                 }
@@ -400,16 +439,16 @@ public Map<String, Object> getNewDeviceData() {
                 SensorReading reading = new SensorReading();
                 reading.setTemperature((Double) data.get("temperature"));
                 reading.setHumidity((Double) data.get("humidity"));
-                // 使用bump状态作为led字段（复用现有字段）
-                reading.setLed((Boolean) data.get("bump") ? 1 : 0);
+                // 使用pump状态作为led字段（复用现有字段）
+                reading.setLed((Boolean) data.get("pump") ? 1 : 0);
                 reading.setDeviceName("STM32-PUMP");  // 新设备名称
                 reading.setCreatedAt(LocalDateTime.now());
-                
+
                 sensorReadingMapper.insert(reading);
-                
-                log.debug("[定时任务] 新设备数据已同步到数据库: T={}℃, H={}%, 水泵={}", 
-                    reading.getTemperature(), reading.getHumidity(), 
-                    (Boolean) data.get("bump") ? "开" : "关");
+
+                log.debug("[定时任务] 新设备数据已同步到数据库: T={}℃, H={}%, 水泵={}",
+                    reading.getTemperature(), reading.getHumidity(),
+                    (Boolean) data.get("pump") ? "开" : "关");
                 return true;
             } else {
                 log.warn("[定时任务] 获取新设备数据失败，无法同步");

@@ -106,6 +106,10 @@ public class ChatController {
     @Value("${deepseek.model:deepseek-chat}")
     private String deepseekModel;
 
+    /**
+     * @deprecated 已被 /api/chat/qwen-proxy 替代，前端不再调用此接口
+     */
+    @Deprecated
     @PostMapping("/ask")
     public Result chatWithAI(@RequestBody Map<String, String> params) {
         String question = params.get("question");
@@ -131,10 +135,10 @@ public class ChatController {
                     }
                 }
             } catch (Exception e) {
-                // ignore
+                log.warn("从OneNET获取传感器数据失败，将使用默认值: {}", e.getMessage());
             }
         }
-        
+
         // 如果OneNET失败，从数据库获取最新
         if (!gotFromOneNet) {
             try {
@@ -144,7 +148,7 @@ public class ChatController {
                     indoorHumidity = latest.getHumidity();
                 }
             } catch (Exception e) {
-                // ignore
+                log.warn("从数据库获取传感器数据失败，将使用默认值: {}", e.getMessage());
             }
         }
 
@@ -165,7 +169,7 @@ public class ChatController {
                 }
             }
         } catch (Exception e) {
-            // ignore
+            log.warn("获取室外温度失败，将使用默认值: {}", e.getMessage());
         }
 
         // 3. 调用接口定义的方法
@@ -197,15 +201,12 @@ public class ChatController {
     private ChatModelFactory chatModelFactory;
 
     @PostMapping("/qwen-proxy")
-    public Map<String, Object> qwenProxy(@RequestBody Map<String, String> params) {
+    public Result qwenProxy(@RequestBody Map<String, String> params) {
         String prompt = params.get("prompt");
         String systemPrompt = params.getOrDefault("systemPrompt", "你是一个农业专家，善于分析农田数据并给出产量和市场预测。请以JSON格式返回结果。");
-        Map<String, Object> response = new HashMap<>();
 
         if (prompt == null || prompt.trim().isEmpty()) {
-            response.put("code", 400);
-            response.put("message", "prompt不能为空");
-            return response;
+            return Result.error("400", "prompt不能为空");
         }
 
         try {
@@ -238,47 +239,34 @@ public class ChatController {
                     .content();
 
             log.info("qwen-proxy({}) 响应长度: {}", provider, content != null ? content.length() : 0);
-            return buildProxySuccessResponse(response, content);
+            return Result.success(parseProxyContent(content));
         } catch (Exception e) {
             log.error("qwen-proxy 调用异常", e);
-            response.put("code", 500);
-            response.put("message", "AI 服务暂时不可用，请稍后重试");
-            response.put("data", null);
+            return Result.error("500", "AI 服务暂时不可用，请稍后重试");
         }
-
-        return response;
     }
 
-    /** 将模型返回的正文写入与原先一致的 code/message/data 结构 */
-    private Map<String, Object> buildProxySuccessResponse(Map<String, Object> response, String content) {
-        if (content != null) {
-            content = content.trim();
-            if (content.startsWith("```json")) {
-                content = content.substring(7);
-            } else if (content.startsWith("```")) {
-                content = content.substring(3);
-            }
-            if (content.endsWith("```")) {
-                content = content.substring(0, content.length() - 3);
-            }
-            content = content.trim();
-
-            try {
-                JSONObject jsonContent = JSONUtil.parseObj(content);
-                response.put("code", 200);
-                response.put("message", "success");
-                response.put("data", jsonContent);
-            } catch (Exception e) {
-                response.put("code", 200);
-                response.put("message", "success");
-                response.put("data", content);
-            }
-        } else {
-            response.put("code", 500);
-            response.put("message", "AI 未返回有效响应");
-            response.put("data", null);
+    /** 将模型返回的正文解析为结构化数据 */
+    private Object parseProxyContent(String content) {
+        if (content == null) {
+            return null;
         }
-        return response;
+        content = content.trim();
+        if (content.startsWith("```json")) {
+            content = content.substring(7);
+        } else if (content.startsWith("```")) {
+            content = content.substring(3);
+        }
+        if (content.endsWith("```")) {
+            content = content.substring(0, content.length() - 3);
+        }
+        content = content.trim();
+
+        try {
+            return JSONUtil.parseObj(content);
+        } catch (Exception e) {
+            return content;
+        }
     }
 }
 

@@ -297,6 +297,8 @@
 </template>
 
 <script>
+import { getStoredUserRaw } from '@/utils/authStorage'
+
 // 初始表单构造器
 function createInventoryForm() {
   return { produce: '', warehouse: '', region: '', number: 1, safeStock: 20, maxStock: 100, dailyConsumption: 0, keeper: '', remark: '' }
@@ -308,7 +310,8 @@ function createPurchaseForm(user) {
 export default {
   name: 'SupplyCenter',
   data() {
-    const user = localStorage.getItem('user') ? JSON.parse(localStorage.getItem('user')) : {}
+    const userStr = getStoredUserRaw()
+    const user = userStr ? JSON.parse(userStr) : {}
     return {
       user,
       activeTab: 'inventory',
@@ -593,10 +596,35 @@ export default {
 }
 
 /* 搜索框与工具栏 */
-:deep(.search-input .el-input__inner ){
-  border: 1px solid #dcdfe6; border-radius: 4px; height: 32px; line-height: 32px; font-size: 13px; background: #fff;
+:deep(.search-input .el-input__wrapper ){
+  height: 32px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  box-shadow: none !important;
+  background: #fff;
+  transition: border-color 0.2s ease;
 }
-:deep(.search-input .el-input__inner:focus ){ border-color: #409eff; }
+:deep(.search-input .el-input__wrapper:hover ){
+  border-color: #c0c4cc;
+  box-shadow: none !important;
+}
+:deep(.search-input .el-input__wrapper.is-focus ){
+  border-color: #409eff;
+  box-shadow: none !important;
+}
+:deep(.search-input .el-input__inner ){
+  height: 30px;
+  line-height: 30px;
+  border: none !important;
+  border-radius: 0;
+  box-shadow: none !important;
+  font-size: 13px;
+  background: transparent;
+}
+:deep(.search-input .el-input__inner:focus ){
+  border: none !important;
+  box-shadow: none !important;
+}
 
 /* 表格样式重写（强力去绿覆盖 global.css 和 green-theme.css） */
 .table-container { padding: 0; }
@@ -695,14 +723,20 @@ export default {
 }
 
 :deep(.ios-form .el-form-item__label ){ font-weight: 500 !important; color: #606266 !important; }
-:deep(.ios-form .el-input__inner),
+:deep(.ios-form .el-input__wrapper),
 :deep(.ios-form .el-textarea__inner ){
   border-radius: 4px !important; border: 1px solid #dcdfe6 !important; transition: none !important;
   box-shadow: none !important;
 }
-:deep(.ios-form .el-input__inner:focus),
+:deep(.ios-form .el-input__wrapper.is-focus),
 :deep(.ios-form .el-textarea__inner:focus ){ 
   border-color: #409eff !important; box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.1) !important; 
+}
+:deep(.ios-form .el-input__inner){
+  border: none !important; border-radius: 0 !important; box-shadow: none !important; background: transparent !important;
+}
+:deep(.ios-form .el-input__inner:focus){
+  border: none !important; box-shadow: none !important;
 }
 :deep(.ios-form .el-input-number__increase),
 :deep(.ios-form .el-input-number__decrease ){ 

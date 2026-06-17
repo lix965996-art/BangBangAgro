@@ -28,10 +28,10 @@ public interface IOneNetService {
     
     /**
      * 控制水泵开关（新设备 KK57iNOm8d）
-     * @param bump 水泵状态（true-开启，false-关闭）
+     * @param pump 水泵状态（true-开启，false-关闭）
      * @return 是否成功
      */
-    boolean controlBump(boolean bump);
+    boolean controlPump(boolean pump);
     
     /**
      * 获取新设备数据（温度、湿度、水泵状态）

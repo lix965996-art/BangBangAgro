@@ -85,5 +85,8 @@ public class FarmlandAlert implements Serializable {
      * 处理人
      */
     private String processor;
+
+    /** 处理人ID (sys_user.id, 周滚动评分归因用) */
+    private Integer processorUserId;
 }
 

@@ -15,7 +15,7 @@
         <div class="stat-card bg-gradient-2">
           <i class="el-icon-time stat-icon"></i>
           <div>
-            <div class="stat-value">98.5%</div>
+            <div class="stat-value">{{ attendanceRate }}</div>
             <div class="stat-label">今日出勤率</div>
           </div>
         </div>
@@ -24,8 +24,8 @@
         <div class="stat-card bg-gradient-3">
           <i class="el-icon-s-data stat-icon"></i>
           <div>
-            <div class="stat-value">4.8分</div>
-            <div class="stat-label">AI 综合评分</div>
+            <div class="stat-value">{{ healthScore }}</div>
+            <div class="stat-label">农田健康指数</div>
           </div>
         </div>
       </el-col>
@@ -33,8 +33,8 @@
         <div class="stat-card bg-gradient-4">
           <i class="el-icon-cpu stat-icon"></i>
           <div>
-            <div class="stat-value">24h</div>
-            <div class="stat-label">系统实时监控</div>
+            <div class="stat-value">{{ runDays }}</div>
+            <div class="stat-label">系统运行天数</div>
           </div>
         </div>
       </el-col>
@@ -55,7 +55,7 @@
       </div>
     </div>
 
-    <div v-loading="loading" element-loading-text="正在从 AI 云端同步农人绩效数据...">
+    <div v-loading="loading" element-loading-text="正在加载农人档案...">
       <el-row :gutter="20">
         <el-col :span="6" v-for="item in tableData" :key="item.id" style="margin-bottom: 20px;">
           <el-card shadow="hover" class="farmer-card" :class="{ 'card-banned': item.status === 1 }" :body-style="{ padding: '0px' }">
@@ -87,7 +87,6 @@
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="edit" icon="el-icon-edit">编辑档案</el-dropdown-item>
-                    <el-dropdown-item command="task" icon="el-icon-tickets">分配任务</el-dropdown-item>
                     <el-dropdown-item v-if="!item.status" command="ban" icon="el-icon-lock" style="color: #E6A23C">封禁账号</el-dropdown-item>
                     <el-dropdown-item v-else command="unban" icon="el-icon-unlock" style="color: #67C23A">解除封禁</el-dropdown-item>
                     <el-dropdown-item command="delete" icon="el-icon-delete" style="color: #F56C6C">离职归档</el-dropdown-item>
@@ -103,28 +102,30 @@
                   <span class="value">{{ item.address ? (item.address.length > 5 ? item.address.substring(0,5)+'...' : item.address) : '机动组' }}</span>
                 </div>
                 <div class="info-item">
-                  <span class="label">当前状态</span>
-                  <span class="value">
-                    <span class="status-dot online"></span> 在线
-                  </span>
+                  <span class="label">最后登录</span>
+                  <span class="value">{{ item.lastLoginTime ? fmtLoginTime(item.lastLoginTime) : '从未登录' }}</span>
                 </div>
+              </div>
+              <div class="login-meta" v-if="item.lastLoginIp">
+                <i class="el-icon-position"></i>
+                <span class="ip">{{ item.lastLoginIp }}</span>
+                <span v-if="item.lastLoginRegion" class="region"> · {{ item.lastLoginRegion }}</span>
               </div>
               <div class="progress-section">
                 <div class="progress-row">
                   <span class="p-label">智能体 综合评级</span>
-                  <span class="p-val">{{ item.aiScore }}分</span>
+                  <span class="p-val">
+                    <el-tag v-if="item.hasScore" size="mini" :type="gradeTagType(item.scoreGrade)" style="margin-right:4px">{{ item.scoreGrade }}级</el-tag>
+                    {{ item.hasScore ? item.aiScore + '分' : '数据不足' }}
+                  </span>
                 </div>
-                <el-progress :percentage="item.aiEfficiency" :color="customColorMethod" :stroke-width="8" :show-text="false"></el-progress>
-                <div class="progress-desc">基于历史农事作业数据分析</div>
+                <el-progress v-if="item.hasScore" :percentage="item.aiEfficiency" :color="customColorMethod" :stroke-width="8" :show-text="false"></el-progress>
+                <div class="progress-desc">{{ item.hasScore ? '近 7 天滚动评分' : '本周暂无作业数据' }}</div>
               </div>
             </div>
 
             <div class="card-footer">
-              <el-button link icon="el-icon-location-outline" @click="handleTrajectory(item)">轨迹</el-button>
-              <el-divider direction="vertical"></el-divider>
               <el-button link icon="el-icon-data-analysis" @click="handlePerformance(item)">绩效</el-button>
-              <el-divider direction="vertical"></el-divider>
-              <el-button link icon="el-icon-chat-dot-round" @click="handleMessage(item)">消息</el-button>
             </div>
           </el-card>
         </el-col>
@@ -174,88 +175,37 @@
       </template>
     </el-dialog>
 
-    <el-dialog 
-      :title=" form.username + ' - AI 智能农事绩效报告'" 
-      v-model="performanceDialogVisible" 
-      width="40%"
+    <el-dialog
+      :title=" form.username + ' - 智能体 综合绩效报告'"
+      v-model="performanceDialogVisible"
+      width="42%"
       center>
-      <div style="text-align: center; margin-bottom: 20px;">
-        <el-progress type="dashboard" :percentage="currentPerformance.score" :color="colors"></el-progress>
-        <div style="font-size: 14px; font-weight: bold; color: #666; margin-top: -10px;">AI 综合效能指数</div>
-      </div>
-      <el-descriptions title="多维能力评估" :column="2" border size="small">
-        <el-descriptions-item label="出勤天数">28天 / 30天</el-descriptions-item>
-        <el-descriptions-item label="作业面积"><el-tag size="small" type="success">120 亩</el-tag></el-descriptions-item>
-        <el-descriptions-item label="病虫害发现率">98.2% <i class="el-icon-top" style="color: red"></i></el-descriptions-item>
-        <el-descriptions-item label="平均响应时间">15分钟</el-descriptions-item>
-        <el-descriptions-item label="AI 专家评价" :span="2">
-          <div style="line-height: 1.5;">该农人在 <span style="color: #409EFF; font-weight: bold;">{{ form.address || '作业区' }}</span> 表现优异，能及时响应IoT预警，建议作为“智慧农业带头人”进行表彰。</div>
-        </el-descriptions-item>
-      </el-descriptions>
+      <div v-if="currentPerformance.loading" v-loading="true" style="height: 220px"></div>
+      <template v-else>
+        <div v-if="currentPerformance.dataThin" style="text-align:center; margin-bottom:12px;">
+          <el-tag type="info" effect="plain" size="small">数据不足 · 本周作业事件过少, 评级仅供参考</el-tag>
+        </div>
+        <div style="text-align: center; margin-bottom: 20px;">
+          <el-progress type="dashboard" :percentage="currentPerformance.score" :color="colors"></el-progress>
+          <div style="font-size: 14px; font-weight: bold; color: #666; margin-top: -10px;">
+            近 7 天综合评分
+            <el-tag v-if="currentPerformance.grade" size="mini" :type="gradeTagType(currentPerformance.grade)" style="margin-left:6px">{{ currentPerformance.grade }}级</el-tag>
+          </div>
+        </div>
+        <el-descriptions title="五维能力评估 (近 7 天滚动)" :column="2" border size="small">
+          <el-descriptions-item label="预警响应">{{ fmtSub(currentPerformance.subs.alert) }}</el-descriptions-item>
+          <el-descriptions-item label="智能体作业">{{ fmtSub(currentPerformance.subs.ai) }}</el-descriptions-item>
+          <el-descriptions-item label="审批把关">{{ fmtSub(currentPerformance.subs.approval) }}</el-descriptions-item>
+          <el-descriptions-item label="出勤活跃">{{ fmtSub(currentPerformance.subs.attendance) }}</el-descriptions-item>
+          <el-descriptions-item label="知识沉淀">{{ fmtSub(currentPerformance.subs.knowledge) }}</el-descriptions-item>
+          <el-descriptions-item label="AI 综合评语" :span="2">
+            <div style="line-height: 1.5;">{{ currentPerformance.commentary || '暂无评语' }}</div>
+          </el-descriptions-item>
+        </el-descriptions>
+      </template>
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="performanceDialogVisible = false">关 闭</el-button>
-        </span>
-      </template>
-    </el-dialog>
-
-    <el-dialog 
-      :title="  form.username + ' - 今日作业轨迹 (GIS实时)'" 
-      v-model="trajectoryDialogVisible" 
-      width="35%">
-      <div style="height: 300px; overflow-y: auto; padding: 10px;">
-        <el-timeline>
-          <el-timeline-item timestamp="08:00" placement="top" type="primary" icon="el-icon-time">
-            <el-card shadow="never">
-              <h4>打卡签到</h4>
-              <p>位置：农场入口打卡机</p>
-            </el-card>
-          </el-timeline-item>
-          <el-timeline-item timestamp="09:30" placement="top" type="warning" icon="el-icon-location-outline">
-            <el-card shadow="never">
-              <h4>巡检作业 - A5地块</h4>
-              <p>停留时长：45分钟 | 状态：正常</p>
-            </el-card>
-          </el-timeline-item>
-          <el-timeline-item timestamp="14:20" placement="top" color="#67C23A" icon="el-icon-truck">
-            <el-card shadow="never">
-              <h4>物资运输 - 2号仓库</h4>
-              <p>操作：领取复合肥 10袋</p>
-            </el-card>
-          </el-timeline-item>
-          <el-timeline-item timestamp="当前" placement="top" type="danger">
-            <h4><el-tag size="mini" effect="dark" type="danger">实时位置</el-tag></h4>
-            <p>{{ form.address || '机动巡逻中' }}</p>
-          </el-timeline-item>
-        </el-timeline>
-      </div>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button type="primary" plain @click="trajectoryDialogVisible = false">查看 3D 轨迹回放</el-button>
-        </span>
-      </template>
-    </el-dialog>
-
-    <el-dialog 
-      :title="'向 ' + form.username + ' 发送指令'" 
-      v-model="messageDialogVisible" 
-      width="30%">
-      <el-form label-position="top">
-        <el-form-item label="快捷指令">
-          <el-radio-group v-model="quickMessage" size="small" @change="fillMessage">
-            <el-radio-button label="紧急灌溉"></el-radio-button>
-            <el-radio-button label="立即归队"></el-radio-button>
-            <el-radio-button label="病害核查"></el-radio-button>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="消息内容">
-          <el-input type="textarea" :rows="4" placeholder="请输入具体的作业指令..." v-model="messageContent"></el-input>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="messageDialogVisible = false">取 消</el-button>
-          <el-button type="primary" icon="el-icon-s-promotion" @click="performSend">发 送</el-button>
         </span>
       </template>
     </el-dialog>
@@ -283,7 +233,7 @@ export default {
       
       // 绩效相关
       performanceDialogVisible: false,
-      currentPerformance: { score: 0 },
+      currentPerformance: { score: 0, subs: {}, commentary: '', dataThin: false, available: false, loading: false, grade: '' },
       colors: [
         {color: '#f56c6c', percentage: 40},
         {color: '#e6a23c', percentage: 60},
@@ -291,26 +241,37 @@ export default {
         {color: '#1989fa', percentage: 100}
       ],
 
-      // 轨迹相关
-      trajectoryDialogVisible: false,
-
-      // 消息相关
-      messageDialogVisible: false,
-      messageContent: '',
-      quickMessage: '',
-
       roles: [],
-      loading: false
+      loading: false,
+
+      // 统计卡片数据
+      attendanceRate: '--',
+      healthScore: '--',
+      runDays: '--'
     }
   },
   created() {
     this.load()
+    this.loadStats()
   },
   methods: {
     customColorMethod(percentage) {
       if (percentage < 60) return '#F56C6C';
       if (percentage < 80) return '#E6A23C';
       return '#67C23A';
+    },
+    fmtSub(v) {
+      if (v === null || v === undefined || v === '') return '本周无数据';
+      const n = Number(v);
+      if (isNaN(n)) return '本周无数据';
+      return n.toFixed(0) + '分';
+    },
+    gradeTagType(g) {
+      if (g === 'S') return 'danger';
+      if (g === 'A') return 'success';
+      if (g === 'B') return 'primary';
+      if (g === 'C') return 'warning';
+      return 'info';
     },
     
     load() {
@@ -331,10 +292,14 @@ export default {
           return
         }
         const records = res.data.records.map(item => {
+          const total = Number(item.scoreTotal);
+          const hasScore = item.scoreTotal != null && !isNaN(total);
           return {
             ...item,
-            aiEfficiency: Math.floor(Math.random() * (99 - 80 + 1)) + 80,
-            aiScore: (Math.random() * (5.0 - 4.0) + 4.0).toFixed(1)
+            scoreGrade: item.scoreGrade || '',
+            aiEfficiency: hasScore ? Math.round(total) : 0,
+            aiScore: hasScore ? (4.0 + total / 100).toFixed(1) : '—',
+            hasScore: hasScore
           }
         });
         this.tableData = records
@@ -349,43 +314,70 @@ export default {
       })
     },
 
+    loadStats() {
+      // 出勤率
+      this.request.get("/user/stats").then(res => {
+        if (res && res.data) {
+          this.attendanceRate = res.data.attendanceRate + '%'
+        }
+      }).catch(() => {})
+
+      // 农田健康指数
+      this.request.get("/health-index/calculate/all").then(res => {
+        if (res && res.data) {
+          const values = Object.values(res.data)
+          if (values.length > 0) {
+            const avg = values.reduce((sum, v) => sum + (v.healthIndex || 0), 0) / values.length
+            this.healthScore = Math.round(avg * 10) / 10 + '分'
+          } else {
+            this.healthScore = '暂无'
+          }
+        }
+      }).catch(() => {})
+
+      // 系统运行天数
+      this.request.get("/api/dashboard/achievements").then(res => {
+        if (res && res.data) {
+          this.runDays = (res.data.runDays || 0) + '天'
+        }
+      }).catch(() => {})
+    },
+
     // --- 按钮逻辑区 ---
 
     // 1. 绩效
     handlePerformance(row) {
-      this.form = row; 
-      this.$message({
-        message: `正在连接 智能体 引擎，分析 ${row.username} 的农事行为数据...`,
-        type: 'success',
-        duration: 1000
+      this.form = row;
+      this.currentPerformance = { score: 0, subs: {}, commentary: '', dataThin: false, available: false, loading: true, grade: '' };
+      this.performanceDialogVisible = true;
+      this.request.get("/user/score", { params: { userId: row.id } }).then(res => {
+        const d = (res && res.data) || {};
+        this.currentPerformance = {
+          score: d.available ? Math.round(Number(d.total) || 0) : 0,
+          subs: d.subs || {},
+          commentary: d.commentary || '',
+          dataThin: !!d.dataThin,
+          available: !!d.available,
+          loading: false,
+          grade: d.grade || ''
+        };
+      }).catch(() => {
+        this.currentPerformance.loading = false;
       });
-      this.currentPerformance = { score: row.aiEfficiency || 88 };
-      setTimeout(() => { this.performanceDialogVisible = true; }, 800);
     },
 
-    // 2. 轨迹 (新增)
-    handleTrajectory(row) {
-      this.form = row;
-      // 这里弹出一个时间轴，假装显示他今天去过哪
-      this.trajectoryDialogVisible = true;
+    // 最后登录时间格式化：今天显示"今天 HH:mm"，否则"MM-DD HH:mm"
+    fmtLoginTime(t) {
+      if (!t) return '从未登录';
+      const d = new Date(t);
+      if (isNaN(d.getTime())) return String(t);
+      const pad = n => String(n).padStart(2, '0');
+      const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      const now = new Date();
+      const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+      return sameDay ? `今天 ${hm}` : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
     },
 
-    // 3. 消息 (新增)
-    handleMessage(row) {
-      this.form = row;
-      this.messageContent = ''; // 清空上一条
-      this.quickMessage = '';
-      this.messageDialogVisible = true;
-    },
-    fillMessage(val) {
-      if(val === '紧急灌溉') this.messageContent = "检测到该区域土壤湿度过低，请立即前往开启滴灌设备。";
-      if(val === '立即归队') this.messageContent = "农场中心有紧急会议，请收到消息后立即返回指挥室。";
-      if(val === '病害核查') this.messageContent = "AI 视觉系统报警，请前往核查叶片是否出现黄斑。";
-    },
-    performSend() {
-      this.$message.success(`指令已通过 5G 网络下发至 ${this.form.username} 的手持终端！`);
-      this.messageDialogVisible = false;
-    },
 
     // --- 通用逻辑区 ---
 
@@ -394,8 +386,6 @@ export default {
         this.handleEdit(row);
       } else if (command === 'delete') {
         this.$confirm('此操作将永久删除该农人档案, 是否继续?', '提示', { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }).then(() => { this.del(row.id); }).catch(err => { console.error('Delete user confirmation canceled:', err) });
-      } else if (command === 'task') {
-        this.$message.success(`已向 ${row.nickname} 派发 "巡检 ${row.address || 'A区'}" 任务`);
       } else if (command === 'ban') {
         this.$confirm(`确定要封禁用户 "${row.username}" 的账号吗？封禁后该用户将无法登录。`, '封禁账号', {
           confirmButtonText: '确定封禁',
@@ -514,6 +504,9 @@ export default {
 .info-item { display: flex; flex-direction: column; }
 .info-item .label { font-size: 12px; color: #999; margin-bottom: 4px; }
 .info-item .value { font-size: 14px; font-weight: 500; color: #333; }
+.login-meta { margin-top: 8px; font-size: 12px; color: #909399; display: flex; align-items: center; gap: 4px; }
+.login-meta .ip { font-family: monospace; color: #606266; }
+.login-meta .region { color: #909399; }
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
 .status-dot.online { background-color: #67C23A; }
 

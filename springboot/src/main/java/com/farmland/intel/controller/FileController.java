@@ -180,6 +180,11 @@ public class FileController {
 
     @DeleteMapping("/{id}")
     public Result delete(@PathVariable Integer id) {
+        // 安全审计修复: 原代码无权限校验,任何登录用户可删除任意文件
+        com.farmland.intel.entity.User currentUser = com.farmland.intel.utils.TokenUtils.getCurrentUser();
+        if (currentUser == null || !"ROLE_ADMIN".equals(currentUser.getRole())) {
+            return Result.error("403", "仅管理员可删除文件");
+        }
         Files files = fileMapper.selectById(id);
         if (files == null) {
             return Result.error("404", "文件不存在");
@@ -193,6 +198,18 @@ public class FileController {
 
     @PostMapping("/del/batch")
     public Result deleteBatch(@RequestBody List<Integer> ids) {
+        // 安全审计修复: 原代码无任何权限校验,任意登录用户可批量删除所有人的文件
+        com.farmland.intel.entity.User currentUser = com.farmland.intel.utils.TokenUtils.getCurrentUser();
+        if (currentUser == null || !"ROLE_ADMIN".equals(currentUser.getRole())) {
+            return Result.error("403", "仅管理员可批量删除文件");
+        }
+        if (ids == null || ids.isEmpty()) {
+            return Result.error("400", "删除ID列表不能为空");
+        }
+        // 防止恶意大批量删除拖垮系统
+        if (ids.size() > 200) {
+            return Result.error("400", "单次批量删除不能超过 200 条");
+        }
         QueryWrapper<Files> queryWrapper = new QueryWrapper<>();
         queryWrapper.in("id", ids);
         List<Files> files = fileMapper.selectList(queryWrapper);
@@ -209,7 +226,21 @@ public class FileController {
         // 从 URL 中提取文件名（最后的 fileUUID 部分）
         String fileUUID = url.substring(url.lastIndexOf('/') + 1);
         if (fileUUID.isEmpty()) return;
+        // 安全审计修复: 防路径穿越(如数据库 url 字段被注入 "xx\..\..\config")
+        if (fileUUID.contains("..") || fileUUID.contains("/") || fileUUID.contains("\\")) {
+            return;
+        }
         File diskFile = new File(fileUploadPath + fileUUID);
+        // 二重检查: 真实路径必须在 fileUploadPath 内
+        try {
+            String canonical = diskFile.getCanonicalPath();
+            String base = new File(fileUploadPath).getCanonicalPath();
+            if (!canonical.startsWith(base)) {
+                return;
+            }
+        } catch (java.io.IOException e) {
+            return;
+        }
         if (diskFile.exists()) {
             diskFile.delete();
         }

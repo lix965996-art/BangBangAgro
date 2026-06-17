@@ -24,6 +24,11 @@ public class Result {
         return new Result(Constants.CODE_200, "", data);
     }
 
+    /** 带提示消息的成功响应 — 用于把初始密码/创建提示等回传给前端 ElMessage */
+    public static Result success(Object data, String msg) {
+        return new Result(Constants.CODE_200, msg, data);
+    }
+
     public static Result error(String code, String msg) {
         return new Result(code, msg, null);
     }

@@ -22,8 +22,6 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -320,8 +318,17 @@ public class AgentService {
             return plan;
         }
 
+        // 自主巡检场景: fallbackPlan 是 1000 行 if-else 关键词匹配,只为对话场景设计,
+        // 拿巡检 prompt 进去会误判出"为您打开监控界面"这种污染巡检报告的对话话术。
+        // 因此该场景下 LLM 不可用时宁可返回 null(=巡检报告跳过),也不污染数据。
+        boolean skipFallback = "auto_patrol".equals(triggerSource);
+
         com.farmland.intel.entity.AiConfig aiCfg = resolveAiConfig(userId);
         if (!StringUtils.hasText(aiCfg.getApiKey())) {
+            if (skipFallback) {
+                log.debug("[auto_patrol] AI Key 未配置,跳过 AI 综合分析(不走 fallback 避免污染巡检报告)");
+                return null;
+            }
             return fallbackPlan(userId, userQuestion);
         }
 
@@ -353,6 +360,10 @@ public class AgentService {
             log.error("调用 AI 生成计划失败", e);
         } finally {
             saveDecisionChain(chainCtx);
+        }
+        if (skipFallback) {
+            log.debug("[auto_patrol] AI 调用失败,跳过(不走 fallback 避免污染巡检报告)");
+            return null;
         }
         return fallbackPlan(userId, userQuestion);
     }
@@ -753,7 +764,7 @@ public class AgentService {
             // 计算利润率
             BigDecimal profitRate = BigDecimal.ZERO;
             if (totalIncome.compareTo(BigDecimal.ZERO) > 0) {
-                profitRate = grossProfit.multiply(new BigDecimal(100)).divide(totalIncome, 2, BigDecimal.ROUND_HALF_UP);
+                profitRate = grossProfit.multiply(new BigDecimal(100)).divide(totalIncome, 2, java.math.RoundingMode.HALF_UP);
             }
             
             result.put("total_income", totalIncome);
@@ -1211,7 +1222,7 @@ public class AgentService {
                         result.setMessage("前端已确认，准备跳转");
                         break;
                     case "irrigation_on":
-                        if (oneNetService != null && oneNetService.controlBump(true)) {
+                        if (oneNetService != null && oneNetService.controlPump(true)) {
                             result.setStatus("success");
                             result.setMessage("已开启智能灌溉（水泵）");
                         } else {
@@ -1220,7 +1231,7 @@ public class AgentService {
                         }
                         break;
                     case "irrigation_off":
-                        if (oneNetService != null && oneNetService.controlBump(false)) {
+                        if (oneNetService != null && oneNetService.controlPump(false)) {
                             result.setStatus("success");
                             result.setMessage("已关闭智能灌溉（水泵）");
                         } else {
@@ -2059,9 +2070,9 @@ public class AgentService {
             BigDecimal profit = totalIncome.subtract(totalCost);
             StringBuilder advice = new StringBuilder();
             advice.append("根据系统财务数据分析：\n\n");
-            advice.append("销售总收入：¥").append(totalIncome.setScale(2, BigDecimal.ROUND_HALF_UP)).append("\n");
-            advice.append("采购总支出：¥").append(totalCost.setScale(2, BigDecimal.ROUND_HALF_UP)).append("\n");
-            advice.append("净利润：¥").append(profit.setScale(2, BigDecimal.ROUND_HALF_UP)).append("\n\n");
+            advice.append("销售总收入：¥").append(totalIncome.setScale(2, java.math.RoundingMode.HALF_UP)).append("\n");
+            advice.append("采购总支出：¥").append(totalCost.setScale(2, java.math.RoundingMode.HALF_UP)).append("\n");
+            advice.append("净利润：¥").append(profit.setScale(2, java.math.RoundingMode.HALF_UP)).append("\n\n");
             
             if (profit.compareTo(BigDecimal.ZERO) > 0) {
                 advice.append("经营状况良好，处于盈利状态。");
@@ -2129,7 +2140,7 @@ public class AgentService {
                     if (p.getPrice() != null && p.getNumber() != null) {
                         BigDecimal cost = p.getPrice().multiply(new BigDecimal(p.getNumber()));
                         totalCost = totalCost.add(cost);
-                        advice.append(" - ¥").append(cost.setScale(2, BigDecimal.ROUND_HALF_UP));
+                        advice.append(" - ¥").append(cost.setScale(2, java.math.RoundingMode.HALF_UP));
                     }
                     advice.append("\n");
                 }
@@ -2137,7 +2148,7 @@ public class AgentService {
                 if (purchaseList.size() > 5) {
                     advice.append("...(还有").append(purchaseList.size() - 5).append("条记录)\n");
                 }
-                advice.append("\n采购总支出：¥").append(totalCost.setScale(2, BigDecimal.ROUND_HALF_UP));
+                advice.append("\n采购总支出：¥").append(totalCost.setScale(2, java.math.RoundingMode.HALF_UP));
                 
                 plan.setAdvice(advice.toString());
                 plan.setActions(actions);
@@ -2162,7 +2173,7 @@ public class AgentService {
                     if (s.getPrice() != null && s.getNumber() != null) {
                         BigDecimal income = s.getPrice().multiply(new BigDecimal(s.getNumber()));
                         totalIncome = totalIncome.add(income);
-                        advice.append(" - ¥").append(income.setScale(2, BigDecimal.ROUND_HALF_UP));
+                        advice.append(" - ¥").append(income.setScale(2, java.math.RoundingMode.HALF_UP));
                     }
                     advice.append("\n");
                 }
@@ -2170,7 +2181,7 @@ public class AgentService {
                 if (salesList.size() > 5) {
                     advice.append("...(还有").append(salesList.size() - 5).append("条记录)\n");
                 }
-                advice.append("\n销售总收入：¥").append(totalIncome.setScale(2, BigDecimal.ROUND_HALF_UP));
+                advice.append("\n销售总收入：¥").append(totalIncome.setScale(2, java.math.RoundingMode.HALF_UP));
                 
                 plan.setAdvice(advice.toString());
                 plan.setActions(actions);
@@ -2610,7 +2621,7 @@ public class AgentService {
             result.put("total_farms", totalFarms);
             result.put("total_users", totalUsers);
             result.put("total_sales_orders", totalSales);
-            result.put("total_revenue", totalRevenue.setScale(2, BigDecimal.ROUND_HALF_UP));
+            result.put("total_revenue", totalRevenue.setScale(2, java.math.RoundingMode.HALF_UP));
             result.put("total_inventory_items", totalInventoryItems);
             result.put("low_stock_items", lowStockItems);
             result.put("total_notices", totalNotices);
@@ -2662,7 +2673,7 @@ public class AgentService {
             }
             
             result.put("total_orders", totalOrders);
-            result.put("total_amount", totalAmount.setScale(2, BigDecimal.ROUND_HALF_UP));
+            result.put("total_amount", totalAmount.setScale(2, java.math.RoundingMode.HALF_UP));
             result.put("sales_details", salesDetails);
             result.put("status", "success");
             
@@ -2706,20 +2717,20 @@ public class AgentService {
             
             BigDecimal profitRate = BigDecimal.ZERO;
             if (totalIncome.compareTo(BigDecimal.ZERO) > 0) {
-                profitRate = totalIncome.subtract(totalCost).divide(totalIncome, 4, BigDecimal.ROUND_HALF_UP).multiply(new BigDecimal(100));
+                profitRate = totalIncome.subtract(totalCost).divide(totalIncome, 4, java.math.RoundingMode.HALF_UP).multiply(new BigDecimal(100));
             }
             
             int profitScore = 0;
             String profitDiagnosis = "";
             if (profitRate.compareTo(new BigDecimal(50)) >= 0) {
                 profitScore = 30;
-                profitDiagnosis = "利润率" + profitRate.setScale(2, BigDecimal.ROUND_HALF_UP) + "%，非常健康";
+                profitDiagnosis = "利润率" + profitRate.setScale(2, java.math.RoundingMode.HALF_UP) + "%，非常健康";
             } else if (profitRate.compareTo(new BigDecimal(30)) >= 0) {
                 profitScore = 20;
-                profitDiagnosis = "利润率" + profitRate.setScale(2, BigDecimal.ROUND_HALF_UP) + "%，良好";
+                profitDiagnosis = "利润率" + profitRate.setScale(2, java.math.RoundingMode.HALF_UP) + "%，良好";
             } else if (profitRate.compareTo(BigDecimal.ZERO) > 0) {
                 profitScore = 10;
-                profitDiagnosis = "利润率" + profitRate.setScale(2, BigDecimal.ROUND_HALF_UP) + "%，偏低，建议优化成本";
+                profitDiagnosis = "利润率" + profitRate.setScale(2, java.math.RoundingMode.HALF_UP) + "%，偏低，建议优化成本";
             } else {
                 profitScore = 0;
                 profitDiagnosis = "当前亏损，需要紧急改善经营策略";
@@ -2858,7 +2869,7 @@ public class AgentService {
                             recentSales = recentSales.add(sale.getPrice().multiply(new BigDecimal(sale.getNumber())));
                         }
                     }
-                    insights.add("近期销售额约¥" + recentSales.setScale(2, BigDecimal.ROUND_HALF_UP) + "，建议继续扩大销售渠道");
+                    insights.add("近期销售额约¥" + recentSales.setScale(2, java.math.RoundingMode.HALF_UP) + "，建议继续扩大销售渠道");
                 } else {
                     insights.add("销售记录较少，建议加强产品销售和市场推广");
                 }
@@ -2888,7 +2899,7 @@ public class AgentService {
                         totalPurchase = totalPurchase.add(p.getPrice().multiply(new BigDecimal(p.getNumber())));
                     }
                 }
-                insights.add("累计采购支出¥" + totalPurchase.setScale(2, BigDecimal.ROUND_HALF_UP) + "，建议对比市场价格优化采购渠道");
+                insights.add("累计采购支出¥" + totalPurchase.setScale(2, java.math.RoundingMode.HALF_UP) + "，建议对比市场价格优化采购渠道");
             }
             
             // 预测建议
@@ -3303,7 +3314,7 @@ public class AgentService {
             }
             
             boolean turnOn = "on".equalsIgnoreCase(action);
-            boolean success = oneNetService.controlBump(turnOn);
+            boolean success = oneNetService.controlPump(turnOn);
             
             if (success) {
                 result.put("success", true);

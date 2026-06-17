@@ -10,7 +10,9 @@ import com.farmland.intel.controller.dto.AlertCreateDTO;
 import com.farmland.intel.entity.FarmlandAlert;
 import com.farmland.intel.entity.Notice;
 import com.farmland.intel.entity.Statistic;
-import com.farmland.intel.mapper.FarmlandAlertMapper;
+import com.farmland.intel.entity.User;
+import com.farmland.intel.service.IFarmlandAlertService;
+import com.farmland.intel.utils.TokenUtils;
 import com.farmland.intel.service.INoticeService;
 import com.farmland.intel.service.IStatisticService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,7 +34,7 @@ import java.util.Map;
 public class FarmlandAlertController {
 
     @Autowired
-    private FarmlandAlertMapper alertMapper;
+    private IFarmlandAlertService alertService;
 
     @Autowired(required = false)
     private IStatisticService statisticService;
@@ -52,8 +54,16 @@ public class FarmlandAlertController {
      */
     @GetMapping("/today/tasks")
     public Result getTodayTasks() {
-        List<FarmlandAlert> alerts = alertMapper.selectTodayPendingAlerts();
+        List<FarmlandAlert> alerts = alertService.selectTodayPendingAlerts();
         return Result.success(alerts);
+    }
+
+    /**
+     * 获取告警类型统计（词云数据）
+     */
+    @GetMapping("/tags")
+    public Result getAlertTags() {
+        return Result.success(alertService.getAlertTypeStats(4));
     }
 
     /**
@@ -61,7 +71,7 @@ public class FarmlandAlertController {
      */
     @GetMapping("/pending")
     public Result getPendingAlerts() {
-        List<FarmlandAlert> alerts = alertMapper.selectList(
+        List<FarmlandAlert> alerts = alertService.list(
             new QueryWrapper<FarmlandAlert>()
                 .eq("status", "pending")
                 .orderByDesc("create_time")
@@ -108,7 +118,7 @@ public class FarmlandAlertController {
         alert.setCreateTime(LocalDateTime.now());
         alert.setProcessor(request.getProcessor());
 
-        alertMapper.insert(alert);
+        alertService.save(alert);
         return Result.success(alert);
     }
 
@@ -117,7 +127,7 @@ public class FarmlandAlertController {
      */
     @PostMapping("/{id}/process")
     public Result processAlert(@PathVariable Integer id, @RequestBody(required = false) FarmlandAlert alert) {
-        FarmlandAlert existingAlert = alertMapper.selectById(id);
+        FarmlandAlert existingAlert = alertService.getById(id);
         if (existingAlert == null) {
             return Result.error("404", "预警不存在");
         }
@@ -127,8 +137,12 @@ public class FarmlandAlertController {
         if (alert != null && alert.getProcessor() != null) {
             existingAlert.setProcessor(alert.getProcessor());
         }
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser != null) {
+            existingAlert.setProcessorUserId(currentUser.getId());
+        }
 
-        alertMapper.updateById(existingAlert);
+        alertService.updateById(existingAlert);
         return Result.success();
     }
 
@@ -137,12 +151,19 @@ public class FarmlandAlertController {
      */
     @PostMapping("/batch/process")
     public Result batchProcessAlerts(@RequestBody List<Integer> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Result.error("400", "ID列表不能为空");
+        }
+        User currentUser = TokenUtils.getCurrentUser();
         for (Integer id : ids) {
-            FarmlandAlert alert = alertMapper.selectById(id);
+            FarmlandAlert alert = alertService.getById(id);
             if (alert != null && "pending".equals(alert.getStatus())) {
                 alert.setStatus("processed");
                 alert.setProcessTime(LocalDateTime.now());
-                alertMapper.updateById(alert);
+                if (currentUser != null) {
+                    alert.setProcessorUserId(currentUser.getId());
+                }
+                alertService.updateById(alert);
             }
         }
         return Result.success();
@@ -153,7 +174,7 @@ public class FarmlandAlertController {
      */
     @GetMapping("/farmland/{farmlandId}")
     public Result getFarmlandAlerts(@PathVariable Integer farmlandId) {
-        List<FarmlandAlert> alerts = alertMapper.selectList(
+        List<FarmlandAlert> alerts = alertService.list(
             new QueryWrapper<FarmlandAlert>()
                 .eq("farmland_id", farmlandId)
                 .orderByDesc("create_time")
@@ -233,7 +254,7 @@ public class FarmlandAlertController {
         alert.setStatus("pending");
         alert.setCreateTime(LocalDateTime.now());
         alert.setProcessor("IoT链路");
-        alertMapper.insert(alert);
+        alertService.save(alert);
 
         if (noticeService != null) {
             try {

@@ -1538,7 +1538,15 @@ export default {
 :deep(.search-input .el-input__inner ){
   border-radius: 6px;
   background: #f8f9fa;
+  border: none;
+  box-shadow: none;
+}
+
+:deep(.search-input .el-input__wrapper ){
   border: 1px solid #e9ecef;
+  border-radius: 6px;
+  background: #f8f9fa;
+  box-shadow: none;
 }
 
 .region-list {

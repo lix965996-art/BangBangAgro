@@ -77,6 +77,27 @@
         </div>
       </div>
     </div>
+
+    <!-- 安全问题弹窗 -->
+    <el-dialog title="设置安全问题（可选）" v-model="securityDialogVisible" width="420px" center :close-on-click-modal="false" :show-close="true">
+      <p style="color: #6b7280; font-size: 13px; margin-bottom: 15px;">设置安全问题后，忘记密码时可通过答案找回。此步骤可跳过。</p>
+      <el-form label-width="80px" size="default">
+        <el-form-item label="选择问题">
+          <el-select v-model="securityForm.question" placeholder="请选择一个安全问题" style="width: 100%">
+            <el-option label="你叫什么名字？" value="你叫什么名字？"></el-option>
+            <el-option label="你的生日是什么？" value="你的生日是什么？"></el-option>
+            <el-option label="你的学号是多少？" value="你的学号是多少？"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="设置答案">
+          <el-input v-model="securityForm.answer" placeholder="请输入答案" autocomplete="off"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="skipSecurity">跳过</el-button>
+        <el-button type="primary" @click="saveSecurityQuestion" :loading="savingSecurity">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -90,6 +111,10 @@ export default {
     return {
       user: {},
       registering: false,
+      securityDialogVisible: false,
+      savingSecurity: false,
+      securityForm: { question: '', answer: '' },
+      registeredToken: '',
       rules: {
         username: [
           { required: true, message: '请输入用户名', trigger: 'blur' }
@@ -108,6 +133,36 @@ export default {
   mounted() {
   },
   methods: {
+    saveSecurityQuestion() {
+      if (!this.securityForm.question) {
+        this.$message.warning("请选择一个问题")
+        return
+      }
+      if (!this.securityForm.answer || !this.securityForm.answer.trim()) {
+        this.$message.warning("请输入答案")
+        return
+      }
+      this.savingSecurity = true
+      this.request.post("/user/security-question", this.securityForm).then(res => {
+        if (res.code === '200' || res.code === 200) {
+          this.$message.success("安全问题设置成功")
+          this.securityDialogVisible = false
+          this.$router.push('/login')
+        } else {
+          this.$message.error(res.msg || '设置失败')
+        }
+      }).catch(() => {
+        this.$message.error('设置失败，请稍后在个人中心设置')
+      }).finally(() => {
+        this.savingSecurity = false
+      })
+    },
+
+    skipSecurity() {
+      this.securityDialogVisible = false
+      this.$router.push('/login')
+    },
+
     register() {
       this.$refs['userForm'].validate((valid) => {
         if (valid) {
@@ -122,14 +177,18 @@ export default {
           
           this.registering = true;
           this.request.post("/user/register", this.user).then(res => {
-            if(res.code === '200') {
+            if(res.code === '200' || res.code === 200) {
               this.$message.success("注册成功")
-              setTimeout(() => {
-                this.$router.push('/login')
-              }, 1500)
+              // 注册成功后弹出安全问题设置
+              if (res.data && res.data.token) {
+                this.registeredToken = res.data.token
+              }
+              this.securityDialogVisible = true
             } else {
-              this.$message.error(res.msg)
+              this.$message.error(res.msg || '注册失败，请稍后重试')
             }
+          }).catch(() => {
+            this.$message.error('网络错误，请检查网络连接后重试')
           }).finally(() => {
             this.registering = false;
           })
@@ -277,6 +336,13 @@ export default {
   font-size: 18px;
   margin-right: 14px;
   color: #9ca3af;
+}
+
+.form-input :deep(.el-input__wrapper ){
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0;
 }
 
 .form-input :deep(.el-input__inner ){

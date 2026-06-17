@@ -11,15 +11,16 @@
         <div class="metric-box">
           <div class="metric-label">高频词云</div>
           <div class="tags-cloud">
-            <el-tag size="mini" type="danger" effect="dark">炭疽病 98%</el-tag>
-            <el-tag size="mini" type="warning" effect="dark">低温预警</el-tag>
-            <el-tag size="mini" type="success" effect="dark">有机肥</el-tag>
-            <el-tag size="mini" color="#626aef" effect="dark" style="color: white">无人机</el-tag>
+            <el-tag v-for="(tag, idx) in alertTags" :key="tag.alertType"
+              size="mini" :type="tagTypes[idx % tagTypes.length]" effect="dark">
+              {{ tag.label }} {{ tag.percent }}%
+            </el-tag>
+            <el-tag v-if="alertTags.length === 0" size="mini" type="info" effect="dark">暂无数据</el-tag>
           </div>
         </div>
         <div class="metric-box">
           <div class="metric-label">知识库容量</div>
-          <div class="digital-number">1,204 <span style="font-size: 12px; color: #aaa">条</span></div>
+          <div class="digital-number">{{ knowledgeCount }} <span style="font-size: 12px; color: #aaa">条</span></div>
         </div>
       </div>
     </div>
@@ -124,10 +125,13 @@
         </div>
 
         <div class="custom-card ai-suggest-card mb-20" style="background: linear-gradient(145deg, #1e293b 0%, #334155 100%); border-radius: 12px; padding: 20px; box-shadow: 0 8px 20px rgba(0,0,0,0.15); margin-bottom: 20px">
-          <div class="panel-header" style="color: white; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; margin-bottom: 15px; font-weight: 600;">🤖 Qwen 今日建议</div>
+          <div class="panel-header" style="color: white; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; margin-bottom: 15px; font-weight: 600;">今日农事建议</div>
           <div class="ai-content">
-            <p style="color: #cbd5e1; line-height: 1.6; font-size: 14px; margin: 0;">“根据近 3 天的日志分析，A5 地块湿度持续偏低。建议启用智能灌溉系统，并将阈值调整为 65%。”</p>
-            <el-button size="small" round style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56,189,248, 0.4); margin-top: 15px">一键执行建议</el-button>
+            <p style="color: #cbd5e1; line-height: 1.6; font-size: 14px; margin: 0;">{{ aiSuggestion }}</p>
+            <el-button size="small" round @click="showSuggestionDetail"
+              style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56,189,248, 0.4); margin-top: 15px">
+              查看详情
+            </el-button>
           </div>
         </div>
 
@@ -192,6 +196,7 @@
 
 <script>
 import { API_ENDPOINTS } from '@/config/api.config';
+import { getStoredUserRaw } from '@/utils/authStorage'
 
 export default {
   name: "Notice",
@@ -206,15 +211,24 @@ export default {
       form: { polishHint: "" },
       polishLoading: false,
       dialogFormVisible: false,
-      user: localStorage.getItem("user") ? JSON.parse(localStorage.getItem("user")) : {}
+      user: getStoredUserRaw() ? JSON.parse(getStoredUserRaw()) : {},
+
+      // 动态数据
+      alertTags: [],
+      tagTypes: ['danger', 'warning', 'success', ''],
+      knowledgeCount: '--',
+      aiSuggestion: '正在加载建议...'
     }
   },
   created() {
     this.load()
+    this.loadAlertTags()
+    this.loadKnowledgeCount()
+    this.loadAiSuggestion()
   },
   computed: {
     uploadHeaders() {
-      const userStr = localStorage.getItem("user")
+      const userStr = getStoredUserRaw()
       const token = userStr ? (JSON.parse(userStr).token || '') : ''
       return { token }
     }
@@ -304,10 +318,43 @@ export default {
     // 模拟 AI 分析
     mockAnalyze() {
       this.$notify({
-        title: '通义千问 分析报告',
+        title: '分析报告',
         message: '该日志关键词提取：[病害] [湿度]。已自动关联历史相似案例 3 起。',
         type: 'success',
         duration: 4000
+      });
+    },
+
+    loadAlertTags() {
+      this.request.get("/alert/tags").then(res => {
+        if (res && res.data) {
+          this.alertTags = res.data
+        }
+      }).catch(() => {})
+    },
+
+    loadKnowledgeCount() {
+      this.request.get("/api/knowledge/documents").then(res => {
+        if (res && res.data) {
+          this.knowledgeCount = res.data.length || 0
+        }
+      }).catch(() => {})
+    },
+
+    loadAiSuggestion() {
+      this.request.get("/agri-report/farmland-advice/1").then(res => {
+        if (res && res.data) {
+          this.aiSuggestion = res.data.advice || res.data || '暂无建议'
+        }
+      }).catch(() => {
+        this.aiSuggestion = '暂无建议，请先配置农田数据'
+      })
+    },
+
+    showSuggestionDetail() {
+      this.$alert(this.aiSuggestion, '农事建议详情', {
+        confirmButtonText: '确定',
+        type: 'info'
       });
     },
     save() {
