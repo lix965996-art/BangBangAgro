@@ -2,7 +2,6 @@ package com.farmland.intel.controller;
 
 import org.springframework.transaction.annotation.Transactional;
 import cn.hutool.core.collection.CollUtil;
-import cn.hutool.core.date.DateUtil;
 import cn.hutool.poi.excel.ExcelUtil;
 import cn.hutool.poi.excel.ExcelReader;
 import cn.hutool.poi.excel.ExcelWriter;
@@ -312,17 +311,18 @@ public class StatisticController {
             }
             List<Statistic> list = statisticService.list(queryWrapper);
             
-            // 计算总面积（area是String类型，需要转换）
-            int totalArea = list.stream()
-                    .filter(s -> s.getArea() != null && !s.getArea().isEmpty())
-                    .mapToInt(s -> {
+            // 计算总面积（area 是 String 且可能含小数；用 Integer.parseInt 解析"12.5"会抛异常归0，导致统计近乎恒为0）
+            double totalArea = list.stream()
+                    .filter(s -> s.getArea() != null && !s.getArea().trim().isEmpty())
+                    .mapToDouble(s -> {
                         try {
-                            return Integer.parseInt(s.getArea());
+                            return Double.parseDouble(s.getArea().trim());
                         } catch (NumberFormatException e) {
                             return 0;
                         }
                     })
                     .sum();
+            totalArea = Math.round(totalArea * 10) / 10.0;  // 保留1位小数
             
             // 计算总数量（存栏）
             int totalStock = list.stream()

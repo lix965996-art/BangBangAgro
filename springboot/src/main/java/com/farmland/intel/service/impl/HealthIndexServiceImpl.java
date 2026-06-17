@@ -322,8 +322,35 @@ public class HealthIndexServiceImpl implements IHealthIndexService {
                 alert.setStatus("pending");
                 alert.setCreateTime(LocalDateTime.now());
                 alertMapper.insert(alert);
+            } else {
+                // 已存在未处理的同类预警：刷新当前值；若级别升级(如 medium→high)则同步升级，
+                // 避免旧 pending 预警永久压制同类新预警、导致级别升级被丢弃。
+                boolean changed = false;
+                if (levelRank(alertLevel) > levelRank(existingAlert.getAlertLevel())) {
+                    existingAlert.setAlertLevel(alertLevel);
+                    existingAlert.setMessage(message);
+                    existingAlert.setSuggestion(suggestion);
+                    changed = true;
+                }
+                BigDecimal newVal = BigDecimal.valueOf(currentValue);
+                if (existingAlert.getCurrentValue() == null
+                        || existingAlert.getCurrentValue().compareTo(newVal) != 0) {
+                    existingAlert.setCurrentValue(newVal);
+                    changed = true;
+                }
+                if (changed) {
+                    alertMapper.updateById(existingAlert);
+                }
             }
         }
+    }
+
+    /** 预警级别排序：high > medium > low，用于判断是否需要升级 */
+    private int levelRank(String level) {
+        if ("high".equals(level)) return 3;
+        if ("medium".equals(level)) return 2;
+        if ("low".equals(level)) return 1;
+        return 0;
     }
 
     /**

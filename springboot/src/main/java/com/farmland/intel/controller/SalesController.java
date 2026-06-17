@@ -40,9 +40,6 @@ public class SalesController {
     @PostMapping
     public Result save(@RequestBody Sales sales) {
         if (sales.getId() == null) {
-            //sales.setTime(DateUtil.now());
-            //sales.setUser(TokenUtils.getCurrentUser().getUsername());
-            
             // 自动填充出货人
             User currentUser = TokenUtils.getCurrentUser();
             if (currentUser != null) {

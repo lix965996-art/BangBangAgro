@@ -314,20 +314,24 @@ export default {
 
     window.addEventListener('resize', this._boundOnWindowResize = () => this.onWindowResize());
 
-    eventBus.on(EVENTS.IRRIGATION_ON, () => {
+    // 存 handler 引用，卸载时按引用精确移除(否则 mitt 的 off(type) 会删光该事件全部 handler，误伤其它组件)
+    this._onIrrigationOn = () => {
       this.switchState.water = true;
       this.$message.success('AI irrigation enabled');
-    });
-    eventBus.on(EVENTS.IRRIGATION_OFF, () => {
+    };
+    this._onIrrigationOff = () => {
       this.switchState.water = false;
       this.$message.info('AI irrigation disabled');
-    });
-    eventBus.on('DRONE_SPRAY_ON', () => {
+    };
+    this._onDroneSprayOn = () => {
       this.switchState.pest = true;
       if (this.selectedFarm) {
         this.handleAction('pest');
       }
-    });
+    };
+    eventBus.on(EVENTS.IRRIGATION_ON, this._onIrrigationOn);
+    eventBus.on(EVENTS.IRRIGATION_OFF, this._onIrrigationOff);
+    eventBus.on('DRONE_SPRAY_ON', this._onDroneSprayOn);
   },
   
   beforeUnmount() {
@@ -340,9 +344,9 @@ export default {
     if (this.clockTimer) {
       clearInterval(this.clockTimer);
     }
-    eventBus.off(EVENTS.IRRIGATION_ON);
-    eventBus.off(EVENTS.IRRIGATION_OFF);
-    eventBus.off('DRONE_SPRAY_ON');
+    eventBus.off(EVENTS.IRRIGATION_ON, this._onIrrigationOn);
+    eventBus.off(EVENTS.IRRIGATION_OFF, this._onIrrigationOff);
+    eventBus.off('DRONE_SPRAY_ON', this._onDroneSprayOn);
     if (this.stm32Timer) {
       clearInterval(this.stm32Timer);
     }

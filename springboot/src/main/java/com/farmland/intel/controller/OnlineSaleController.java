@@ -168,10 +168,20 @@ public class OnlineSaleController {
             return Result.error("400", "无效的状态值，允许: " + ALLOWED_STATUS);
         }
         OnlineSale sale = onlineSaleService.getById(id);
-        if (sale != null) {
-            sale.setStatus(status);
-            onlineSaleService.updateById(sale);
+        if (sale == null) {
+            return Result.error("404", "商品不存在");
         }
+        // 数据权限：非管理员只能修改自己上架的商品，防越权(IDOR)改他人商品状态
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())
+                && !currentUser.getUsername().equals(sale.getSeller())) {
+            return Result.error("403", "无权操作他人商品");
+        }
+        sale.setStatus(status);
+        onlineSaleService.updateById(sale);
         return Result.success();
     }
 

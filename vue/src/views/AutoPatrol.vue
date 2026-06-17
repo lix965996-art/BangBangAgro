@@ -88,10 +88,10 @@
         <div class="agent-card-head">
           <div>
             <div class="agent-eyebrow">AUTONOMOUS FARM AGENT</div>
-            <div class="agent-title">智能体操作视窗</div>
+            <div class="agent-title">智能体实时操作台</div>
           </div>
-          <el-tag size="small" :type="triggering ? 'warning' : 'info'">
-            {{ triggering ? '执行中' : '待命' }}
+          <el-tag size="small" :type="triggering ? 'warning' : (deviceState.online ? 'success' : 'info')">
+            {{ triggering ? '执行中' : (deviceState.online ? '设备在线' : '设备离线') }}
           </el-tag>
         </div>
 
@@ -100,17 +100,15 @@
             <div class="window-dots"><span></span><span></span><span></span></div>
             <div class="window-address">
               <i class="el-icon-monitor"></i>
-              帮帮农 / {{ activeAgentScreen }}
+              帮帮农 / {{ activeModuleLabel }}
             </div>
             <div class="window-state" :class="{ running: triggering || status.enabled }">
-              {{ triggering ? '智能体正在接管' : '实时待命' }}
+              {{ triggering ? '智能体正在执行' : (status.enabled ? '自主巡检中' : '已暂停') }}
             </div>
           </div>
 
           <div class="project-live-window real-project-window">
-            <div class="agent-cursor" :class="{ active: triggering }" :style="agentCursorStyle">
-              <span></span>
-            </div>
+            <div v-if="playIndex >= 0" class="agent-cursor active" :style="cursorStyle"><span></span></div>
 
             <iframe
               class="real-project-frame"
@@ -120,69 +118,55 @@
 
             <div class="agent-route-strip">
               <div
-                v-for="(item, index) in agentViewportRoutes"
+                v-for="item in agentViewportRoutes"
                 :key="item.key"
                 class="route-chip"
-                :class="{
-                  active: activeInterfaceKey === item.key,
-                  done: index < agentStage - 1
-                }"
+                :class="{ active: activeModuleKey === item.key }"
               >
                 <i :class="item.icon"></i>
                 <span>{{ item.label }}</span>
               </div>
             </div>
-
-            <div class="agent-live-caption">
-              <strong>{{ agentCalloutTitle }}</strong>
-              <span>{{ agentCalloutText }}</span>
-            </div>
           </div>
 
           <div class="agent-bottom-feed">
-            <div class="feed-title">智能体操作轨迹</div>
-            <div class="feed-lines">
+            <div class="feed-title">智能体动作记录 <span class="feed-sub">（来自真实巡检日志）</span></div>
+            <div class="feed-lines" v-if="agentActions.length">
               <div
-                v-for="(line, index) in visibleOperationFeed"
-                :key="line"
+                v-for="(a, index) in agentActions"
+                :key="a.id || index"
                 class="feed-line"
-                :class="{ current: index === visibleOperationFeed.length - 1 && triggering }"
+                :class="{ current: index === playIndex }"
               >
-                <span>{{ index + 1 }}</span>
-                {{ line }}
+                <span class="feed-dot" :class="a.resultClass"></span>
+                <span class="feed-time">{{ a.time }}</span>
+                <b>{{ a.farm }}</b> · {{ a.label }}
+                <em class="feed-result">{{ a.resultText }}</em>
               </div>
             </div>
+            <div v-else class="feed-empty">暂无自动操作记录，点「立即巡检一次」让智能体执行。</div>
           </div>
         </div>
       </div>
 
       <div class="agent-progress-card">
         <div class="progress-head">
-          <span>巡检进度</span>
-          <strong>{{ agentProgress }}%</strong>
-        </div>
-        <div class="progress-track">
-          <div class="progress-fill" :style="{ width: agentProgress + '%' }"></div>
+          <span>实时设备状态</span>
+          <strong :class="{ online: deviceState.online }">{{ deviceState.online ? '在线' : '离线' }}</strong>
         </div>
 
-        <div class="agent-step-list">
-          <div
-            v-for="(step, index) in agentSteps"
-            :key="step.title"
-            class="agent-step"
-            :class="agentStepClass(index)"
-          >
-            <span class="step-number">{{ index + 1 }}</span>
-            <div>
-              <div class="step-title">{{ step.title }}</div>
-              <div class="step-desc">{{ step.desc }}</div>
-            </div>
-          </div>
+        <div class="device-grid">
+          <div class="device-cell"><span class="d-label">温度</span><span class="d-val">{{ fmtNum(deviceState.temperature) }}<i>℃</i></span></div>
+          <div class="device-cell"><span class="d-label">空气湿度</span><span class="d-val">{{ fmtNum(deviceState.humidity) }}<i>%</i></span></div>
+          <div class="device-cell"><span class="d-label">土壤湿度</span><span class="d-val">{{ deviceState.soil == null ? '--' : deviceState.soil }}<i>%</i></span></div>
+          <div class="device-cell"><span class="d-label">水泵</span><span class="d-state" :class="{ on: deviceState.pump }">{{ deviceState.pump ? '运行' : '停止' }}</span></div>
+          <div class="device-cell"><span class="d-label">补光灯</span><span class="d-state" :class="{ on: deviceState.led }">{{ deviceState.led ? '开' : '关' }}</span></div>
+          <div class="device-cell"><span class="d-label">风扇</span><span class="d-state" :class="{ on: deviceState.fan }">{{ deviceState.fan ? '运行' : '停止' }}</span></div>
         </div>
 
         <div class="agent-trace">
-          <div class="trace-title">操作轨迹</div>
-          <div class="trace-text">{{ triggering ? '智能体正在执行巡检链路' : '等待智能体开始巡检' }}</div>
+          <div class="trace-title">说明</div>
+          <div class="trace-text">设备状态来自真实传感器、动作记录来自真实巡检日志，非模拟。</div>
         </div>
       </div>
     </div>
@@ -278,97 +262,76 @@ export default {
       logsLoading: false,
       ruleExpanded: [],
       intervalLabel: '30 分钟',
-      agentStage: 0,
-      agentSteps: [
-        { title: '打开无人农场控制台', desc: '读取运行状态' },
-        { title: '读取环境监测数据', desc: '采集温湿度与光照' },
-        { title: '查看视觉巡检结果', desc: '聚合图像异常' },
-        { title: '定位地块与巡检区域', desc: '确认异常位置' },
-        { title: '执行自主巡检策略', desc: '触发灌溉/补光/通知' }
-      ],
+      playIndex: -1,
+      playTimer: null,
+      devicePollTimer: null,
+      metaPollTimer: null,
+      deviceState: { online: false, temperature: null, humidity: null, soil: null, pump: false, led: false, fan: false },
       agentViewportRoutes: [
         { key: 'control', label: '无人农场指挥中心', path: '/auto-patrol?agentViewport=1', icon: 'el-icon-monitor' },
         { key: 'sensor', label: '环境监测', path: '/aether-monitor?agentViewport=1', icon: 'el-icon-sunny' },
         { key: 'vision', label: '视觉巡检', path: '/fruit-detect?agentViewport=1', icon: 'el-icon-camera-solid' },
         { key: 'map', label: '地块资产图谱', path: '/farmland?agentViewport=1', icon: 'el-icon-location-outline' },
         { key: 'execute', label: '无人农场总控', path: '/unmanned-dashboard?agentViewport=1', icon: 'el-icon-magic-stick' }
-      ],
-      operationFeed: [
-        '打开项目真实页面：无人农场指挥中心，读取巡检状态和运行数据。',
-        '切换项目真实页面：环境监测，查看温湿度、光照和传感器数据。',
-        '切换项目真实页面：视觉巡检，查看图像识别和异常结果。',
-        '切换项目真实页面：地块资产图谱，定位异常地块和巡检区域。',
-        '切换项目真实页面：无人农场总控，执行策略并写入巡检日志。'
       ]
     }
   },
   computed: {
-    agentProgress() {
-      return Math.min(100, this.agentStage * 20)
-    },
-    recentAgentLogs() {
-      return (this.logs || []).slice(0, 5)
-    },
-    latestActionLabel() {
-      const latest = this.recentAgentLogs[0]
-      return latest ? this.actionLabel(latest.actionType) : '暂无'
-    },
     embeddedMode() {
       return this.$route && this.$route.query && this.$route.query.agentViewport === '1'
     },
-    agentCalloutTitle() {
-      return this.triggering ? this.agentSteps[Math.max(this.agentStage - 1, 0)].title : '打开无人农场控制台'
+    // 真实动作记录：从巡检日志挑出"有实际动作"的条目(排除 no_action)，最近 6 条
+    agentActions() {
+      return (this.logs || [])
+        .filter(l => l.actionType && l.actionType !== 'no_action')
+        .slice(0, 6)
+        .map(l => ({
+          id: l.id,
+          time: this.fmtTime(l.patrolTime),
+          farm: l.farmName || '全局',
+          label: this.actionLabel(l.actionType),
+          resultText: this.resultLabel(l.result),
+          resultClass: l.result === 'failed' ? 'fail' : (l.result === 'success' ? 'ok' : 'skip'),
+          moduleKey: this.moduleKeyForAction(l.actionType)
+        }))
     },
-    agentCalloutText() {
-      return this.triggering
-        ? `智能体正在操作真实项目页面：${this.activeAgentScreen}。`
-        : '这里显示的是项目真实页面，不是模拟图。点击“立即巡检一次”后，智能体会在这些真实模块间切换。'
+    // 当前高亮的动作对应模块：播放中=playIndex，否则=最新一条
+    activeModuleKey() {
+      const list = this.agentActions
+      if (!list.length) return 'control'
+      const idx = this.playIndex >= 0 ? this.playIndex : 0
+      return (list[idx] && list[idx].moduleKey) || 'control'
     },
-    activeInterfaceKey() {
-      const keys = ['control', 'sensor', 'vision', 'map', 'execute']
-      return keys[Math.max(this.agentStage - 1, 0)] || 'control'
+    activeRoute() {
+      return this.agentViewportRoutes.find(r => r.key === this.activeModuleKey) || this.agentViewportRoutes[0]
     },
-    activeAgentScreen() {
-      const current = this.agentViewportRoutes.find(item => item.key === this.activeInterfaceKey)
-      return current ? current.label : '无人农场指挥中心'
-    },
-    activeAgentRoute() {
-      return this.agentViewportRoutes.find(item => item.key === this.activeInterfaceKey) || this.agentViewportRoutes[0]
+    activeModuleLabel() {
+      return this.activeRoute.label
     },
     agentViewportSrc() {
       const baseUrl = window.location.href.split('#')[0]
-      return `${baseUrl}#${this.activeAgentRoute.path}`
+      return `${baseUrl}#${this.activeRoute.path}`
     },
-    agentCursorStyle() {
-      const positions = [
-        { left: '27%', top: '24%' },
-        { left: '50%', top: '43%' },
-        { left: '72%', top: '43%' },
-        { left: '45%', top: '72%' },
-        { left: '78%', top: '83%' }
-      ]
-      const current = positions[Math.max(this.agentStage - 1, 0)] || positions[0]
-      return {
-        left: current.left,
-        top: current.top
-      }
-    },
-    visibleOperationFeed() {
-      const count = this.agentStage > 0 ? this.agentStage : 1
-      return this.operationFeed.slice(0, count)
+    cursorStyle() {
+      const pos = { control: '10%', sensor: '30%', vision: '50%', map: '70%', execute: '90%' }
+      return { left: pos[this.activeModuleKey] || '50%', top: '82%' }
     }
   },
-  created() {
+  mounted() {
     this.loadStatus()
     this.loadLogs()
+    this.fetchDeviceState()
+    // 真实设备状态轮询(10s)：背景自动浇水/控灯也会在这里体现(降频以减少状态接口写库)
+    this.devicePollTimer = setInterval(() => this.fetchDeviceState(), 10000)
+    // 真日志/状态轮询(20s)：后台自主巡检产生的真实动作会自动出现在动作记录里
+    this.metaPollTimer = setInterval(() => { this.loadStatus(); this.loadLogs() }, 20000)
+  },
+  beforeUnmount() {
+    if (this.devicePollTimer) clearInterval(this.devicePollTimer)
+    if (this.metaPollTimer) clearInterval(this.metaPollTimer)
+    if (this.playTimer) clearInterval(this.playTimer)
   },
   methods: {
-    agentStepClass(index) {
-      if (!this.agentStage) return ''
-      if (index < this.agentStage - 1) return 'done'
-      if (index === this.agentStage - 1) return this.triggering ? 'active' : 'done'
-      return ''
-    },
     async loadStatus() {
       try {
         const res = await this.request.get('/api/patrol/status')
@@ -400,22 +363,19 @@ export default {
     },
     async triggerPatrol() {
       this.triggering = true
-      this.agentStage = 1
-      const stageTimer = setInterval(() => {
-        this.agentStage = Math.min(this.agentStage + 1, this.agentSteps.length)
-      }, 650)
       try {
         const res = await this.request.post('/api/patrol/trigger')
         if (res.code === '200') {
-          this.agentStage = this.agentSteps.length
           if (this.$message.closeAll) this.$message.closeAll()
           this.$message.success(
             `巡检完成 ✅ 检查了 ${res.data.farmsChecked} 块农田，执行了 ${res.data.actionsExecuted} 项操作`
           )
           await this.loadStatus()
           await this.loadLogs()
+          this.fetchDeviceState()
+          this.playActions()  // 按真实动作记录逐条回放(高亮 + 视窗跳到对应真实模块)
           // AI 综合分析走异步，触发后稍等再拉，等"用你自己 key 跑出的报告"写入数据库
-          setTimeout(() => this.loadStatus(), 4000)
+          setTimeout(() => { this.loadStatus(); this.loadLogs(); this.fetchDeviceState() }, 4000)
           setTimeout(() => { this.loadStatus(); this.loadLogs() }, 9000)
         } else {
           this.$message.error(res.msg || '巡检失败')
@@ -423,16 +383,68 @@ export default {
       } catch (e) {
         this.$message.error('巡检异常：' + e.message)
       } finally {
-        clearInterval(stageTimer)
         this.triggering = false
       }
+    },
+
+    fmtTime(t) {
+      if (!t) return ''
+      const d = new Date(t)
+      const p = n => String(n).padStart(2, '0')
+      return isNaN(d.getTime()) ? String(t).slice(11, 16) : `${p(d.getHours())}:${p(d.getMinutes())}`
+    },
+    fmtNum(v) {
+      if (v == null || v === '') return '--'
+      const n = Number(v)
+      return Number.isFinite(n) ? Math.round(n * 10) / 10 : '--'
+    },
+    // 动作类型 → 对应真实模块(视窗跳转用)
+    moduleKeyForAction(type) {
+      if (['irrigation_on', 'irrigation_off', 'led_on', 'led_off', 'fan_on', 'fan_off'].includes(type)) return 'sensor'
+      return 'control'
+    },
+    async fetchDeviceState() {
+      try {
+        const res = await this.request.get('/aether/device/status')
+        const d = (res && res.data) || {}
+        this.deviceState = {
+          online: !!d.online,
+          temperature: d.temperature,
+          humidity: d.humidity,
+          soil: (d.soil == null ? null : d.soil),
+          pump: d.pump === true || d.pump === 1,
+          led: d.led === true || d.led === 1,
+          fan: d.fan === true || d.fan === 1
+        }
+      } catch (e) { /* 设备离线，忽略 */ }
+    },
+    // 按真实动作记录逐条回放：高亮当前条 + 视窗跳到该动作对应的真实模块
+    playActions() {
+      if (this.playTimer) clearInterval(this.playTimer)
+      const total = this.agentActions.length
+      if (!total) { this.playIndex = -1; return }
+      this.playIndex = 0
+      this.playTimer = setInterval(() => {
+        if (this.playIndex >= total - 1) {
+          clearInterval(this.playTimer)
+          this.playTimer = null
+          setTimeout(() => { this.playIndex = -1 }, 1500)
+          return
+        }
+        this.playIndex++
+      }, 1200)
     },
 
     actionLabel(type) {
       const map = {
         irrigation_on:     '开启灌溉',
+        irrigation_off:    '关闭灌溉',
         led_on:            '开启补光灯',
+        led_off:           '关闭补光灯',
+        fan_on:            '开启风扇',
+        fan_off:           '关闭风扇',
         send_notification: '推送通知',
+        agent_decision:    'Agent 决策',
         ai_analysis:       'AI 报告',
         no_action:         '无需操作'
       }
@@ -714,37 +726,6 @@ export default {
 .route-chip.done {
   border-color: rgba(74, 222, 128, .36);
   color: #059669;
-}
-
-.agent-live-caption {
-  position: absolute;
-  left: 18px;
-  right: 18px;
-  bottom: 18px;
-  z-index: 4;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid rgba(187, 247, 208, .9);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, .9);
-  box-shadow: 0 14px 30px rgba(15, 23, 42, .12);
-  backdrop-filter: blur(10px);
-}
-
-.agent-live-caption strong {
-  flex: 0 0 auto;
-  color: #10251b;
-  font-size: 14px;
-  font-weight: 900;
-}
-
-.agent-live-caption span {
-  min-width: 0;
-  color: #64748b;
-  font-size: 13px;
-  line-height: 1.45;
 }
 
 .mini-project-sidebar {
@@ -1151,150 +1132,34 @@ export default {
   font-weight: 800;
 }
 
-.console-status {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid #dfeee4;
+/* 真数据视窗：动作记录条目 + 设备状态网格 */
+.feed-sub { color: #94a3b8; font-weight: 400; font-size: 11px; }
+.feed-empty { color: #94a3b8; font-size: 12px; padding: 10px 0; }
+.feed-line span.feed-dot {
+  width: 8px; height: 8px; flex: 0 0 8px; border-radius: 999px; background: #cbd5e1;
 }
+.feed-line span.feed-dot.ok { background: #10b981; }
+.feed-line span.feed-dot.fail { background: #ef4444; }
+.feed-line span.feed-dot.skip { background: #94a3b8; }
+.feed-line span.feed-time {
+  width: auto; height: auto; flex: 0 0 auto; border-radius: 0;
+  background: transparent; color: #94a3b8; font-size: 11px; font-weight: 600;
+}
+.feed-result { margin-left: auto; font-style: normal; font-size: 11px; color: #64748b; }
 
-.console-status-main {
-  display: flex;
-  gap: 12px;
-  min-width: 0;
+.device-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0;
 }
-
-.pulse-dot {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 12px;
-  margin-top: 5px;
-  border-radius: 999px;
-  background: #cbd5e1;
-  box-shadow: 0 0 0 5px rgba(148, 163, 184, .14);
+.device-cell {
+  display: flex; flex-direction: column; gap: 4px;
+  background: #f8fafc; border: 1px solid #eef2f7; border-radius: 10px; padding: 10px 12px;
 }
-
-.pulse-dot.running {
-  background: #10b981;
-  box-shadow: 0 0 0 5px rgba(16, 185, 129, .14);
-}
-
-.console-title {
-  color: #10251b;
-  font-size: 18px;
-  font-weight: 800;
-}
-
-.console-desc {
-  margin-top: 6px;
-  color: #64748b;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.console-meta {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-  max-width: 420px;
-}
-
-.console-meta span {
-  padding: 5px 8px;
-  border-radius: 999px;
-  background: #fff;
-  border: 1px solid #e2eee6;
-  color: #4f6b58;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.console-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-  margin-top: 14px;
-}
-
-.console-metric {
-  padding: 14px;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, .04);
-}
-
-.console-metric span {
-  display: block;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.console-metric strong {
-  display: block;
-  margin-top: 7px;
-  color: #10251b;
-  font-size: 18px;
-  font-weight: 800;
-}
-
-.console-section {
-  margin-top: 14px;
-  padding: 14px;
-  border-radius: 10px;
-  background: #fff;
-}
-
-.console-section-title {
-  color: #1f3d2b;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.console-report {
-  margin-top: 8px;
-  color: #334155;
-  font-size: 13px;
-  line-height: 1.7;
-}
-
-.console-log-list {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.console-log-item {
-  display: grid;
-  grid-template-columns: 150px 1fr 64px;
-  gap: 10px;
-  align-items: center;
-  padding: 9px 10px;
-  border-radius: 8px;
-  background: #f8fbf9;
-  color: #475569;
-  font-size: 12px;
-}
-
-.log-action {
-  color: #0f766e;
-  font-weight: 800;
-}
-
-.log-result {
-  text-align: right;
-  color: #059669;
-  font-weight: 800;
-}
-
-.console-empty {
-  margin-top: 8px;
-  color: #94a3b8;
-  font-size: 13px;
-}
+.d-label { font-size: 11px; color: #94a3b8; }
+.d-val { font-size: 18px; font-weight: 800; color: #0f766e; }
+.d-val i { font-size: 12px; color: #94a3b8; font-style: normal; margin-left: 2px; }
+.d-state { font-size: 15px; font-weight: 800; color: #94a3b8; }
+.d-state.on { color: #10b981; }
+.progress-head strong.online { color: #10b981; }
 
 .agent-progress-card {
   padding: 18px;
@@ -1309,78 +1174,6 @@ export default {
 .progress-head strong {
   color: #111827;
   font-size: 16px;
-}
-
-.progress-track {
-  height: 8px;
-  margin: 10px 0 16px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #edf5ef;
-}
-
-.progress-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #10b981, #34d399);
-  transition: width .3s ease;
-}
-
-.agent-step-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.agent-step {
-  display: flex;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 10px;
-  background: #f8fbf9;
-  color: #64748b;
-}
-
-.agent-step.active {
-  background: #ecfdf5;
-  color: #065f46;
-}
-
-.agent-step.done {
-  color: #047857;
-  background: #f0fdf4;
-}
-
-.step-number {
-  width: 22px;
-  height: 22px;
-  flex: 0 0 22px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #e2e8f0;
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.agent-step.active .step-number,
-.agent-step.done .step-number {
-  background: #bbf7d0;
-  color: #047857;
-}
-
-.step-title {
-  color: #1f2937;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.step-desc {
-  margin-top: 3px;
-  color: #94a3b8;
-  font-size: 12px;
 }
 
 .agent-trace {

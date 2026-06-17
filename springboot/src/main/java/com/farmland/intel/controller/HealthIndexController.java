@@ -1,9 +1,12 @@
 package com.farmland.intel.controller;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.farmland.intel.common.Result;
 import com.farmland.intel.entity.Statistic;
+import com.farmland.intel.entity.User;
 import com.farmland.intel.mapper.StatisticMapper;
 import com.farmland.intel.service.IHealthIndexService;
+import com.farmland.intel.utils.TokenUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -50,11 +53,17 @@ public class HealthIndexController {
      */
     @GetMapping("/calculate/all")
     public Result calculateAllHealthIndex() {
-        List<Statistic> statistics = statisticMapper.selectList(null);
-        List<com.farmland.intel.entity.Statistic> list = statistics;
-        
+        // 数据权限：非管理员只算自己负责的农田，防越权查看他人农田；并加上限防全表无界扫描
+        QueryWrapper<Statistic> qw = new QueryWrapper<>();
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+            qw.eq("keeper", currentUser.getUsername());
+        }
+        qw.last("LIMIT 500");
+        List<Statistic> statistics = statisticMapper.selectList(qw);
+
         Map<String, Object> result = new HashMap<>();
-        for (Statistic statistic : list) {
+        for (Statistic statistic : statistics) {
             Integer healthIndex = healthIndexService.calculateHealthIndex(statistic);
             Map<String, Object> item = new HashMap<>();
             item.put("farmlandId", statistic.getId());

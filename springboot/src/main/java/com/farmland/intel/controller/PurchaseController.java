@@ -40,9 +40,6 @@ public class PurchaseController {
     @PostMapping
     public Result save(@RequestBody Purchase purchase) {
         if (purchase.getId() == null) {
-            //purchase.setTime(DateUtil.now());
-            //purchase.setUser(TokenUtils.getCurrentUser().getUsername());
-            
             // 自动填充采购员
             User currentUser = TokenUtils.getCurrentUser();
             if (currentUser != null) {

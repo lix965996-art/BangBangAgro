@@ -341,24 +341,82 @@ public class AgentTools {
         return result.toString();
     }
 
-    @Tool(description = "综合评估农场经营健康度，从利润率、库存周转、资金流等多维度打分并给出诊断建议")
+    @Tool(description = "综合评估农场经营健康度，从利润率、库存安全水平等真实维度打分并给出诊断建议")
     public String getBusinessHealthScore() {
-        // 复用利润分析 + 库存数据综合评分
         JSONObject profit = new JSONObject(getProfitAnalysis());
         JSONObject result = new JSONObject();
         result.put("profit_analysis", profit);
-        result.put("health_score", profit.containsKey("error") ? 0 : 75);
-        result.put("advice", "建议定期检查库存周转率和应收账款回收情况");
+
+        if (profit.containsKey("error")) {
+            result.put("health_score", 0);
+            result.put("advice", "无法获取利润数据，请检查销售/采购服务配置");
+            return result.toString();
+        }
+
+        // 真实利润率（来自 getProfitAnalysis 的真实聚合）
+        Double marginObj = profit.getDouble("profit_margin_percent");
+        double margin = marginObj != null ? marginObj : 0.0;
+
+        // 真实低库存占比（number < safeStock）
+        int total = 0, low = 0;
+        if (inventoryService != null) {
+            for (Inventory inv : inventoryService.list()) {
+                total++;
+                if (inv.getNumber() != null && inv.getSafeStock() != null
+                        && inv.getNumber() < inv.getSafeStock()) {
+                    low++;
+                }
+            }
+        }
+        double lowRatio = total > 0 ? (double) low / total : 0.0;
+
+        // 评分全部基于真实数据：利润率分量(0-70) + 库存安全分量(0-30)
+        double profitScore = Math.max(0, Math.min(70, 35 + margin)); // 0%→35、35%→70、负利润更低
+        double stockScore = 30 * (1 - lowRatio);
+        int score = (int) Math.round(Math.max(0, Math.min(100, profitScore + stockScore)));
+
+        result.put("health_score", score);
+        result.put("profit_margin_percent", margin);
+        result.put("inventory_total", total);
+        result.put("inventory_low_stock", low);
+
+        StringBuilder advice = new StringBuilder();
+        if (margin <= 0) advice.append("当前毛利为负或为零，需控制采购成本或提升售价；");
+        else if (margin < 15) advice.append("利润率偏低，关注成本结构；");
+        if (lowRatio > 0.3) advice.append("超三成物资低于安全库存，及时补货；");
+        if (advice.length() == 0) advice.append("经营指标健康，保持当前节奏");
+        result.put("advice", advice.toString());
         return result.toString();
     }
 
-    @Tool(description = "分析销售、采购、库存的历史趋势，预测未来走向并给出优化建议")
+    @Tool(description = "汇总销售/采购/库存的真实经营聚合数据与低库存清单。注意：系统未存交易时间序列，不提供涨跌趋势预测")
     public String getTrendAnalysis() {
         JSONObject result = new JSONObject();
-        result.put("sales_trend", "稳定增长");
-        result.put("purchase_trend", "季节性波动");
-        result.put("inventory_trend", "需关注低库存物资");
-        result.put("advice", "建议根据历史数据调整采购计划，避免库存积压或短缺");
+        JSONObject profit = new JSONObject(getProfitAnalysis());
+        result.put("total_income", profit.getOrDefault("total_income", 0));
+        result.put("total_cost", profit.getOrDefault("total_cost", 0));
+        result.put("gross_profit", profit.getOrDefault("gross_profit", 0));
+
+        // 真实低库存物资清单
+        JSONArray lowStock = new JSONArray();
+        if (inventoryService != null) {
+            for (Inventory inv : inventoryService.list()) {
+                if (inv.getNumber() != null && inv.getSafeStock() != null
+                        && inv.getNumber() < inv.getSafeStock()) {
+                    JSONObject o = new JSONObject();
+                    o.put("produce", inv.getProduce());
+                    o.put("number", inv.getNumber());
+                    o.put("safe_stock", inv.getSafeStock());
+                    lowStock.add(o);
+                }
+            }
+        }
+        result.put("low_stock_items", lowStock);
+        // 诚实声明：无时间序列，不臆造趋势方向
+        result.put("note", "以上为实时聚合的真实数据；系统未存储交易时间序列，无法计算涨跌趋势，故不提供方向性预测。");
+        result.put("advice", lowStock.isEmpty()
+                ? "库存均高于安全水平；建议持续记录交易时间，以支持后续趋势分析"
+                : "存在低于安全库存的物资，建议优先补货");
         return result.toString();
     }
 

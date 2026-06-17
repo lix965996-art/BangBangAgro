@@ -169,6 +169,11 @@ public class ScheduledTasks {
     private volatile long pumpOnTimestamp = 0;
 
     /**
+     * 自动灌溉检查的重叠守卫：上一次检查未结束时跳过本次，避免并发重复下发水泵命令
+     */
+    private final AtomicBoolean irrigationChecking = new AtomicBoolean(false);
+
+    /**
      * 每 5 分钟检查一次自动灌溉状态
      * 触发灌溉条件（满足任一即可）：
      * 1. 土壤湿度低于阈值（默认 30%）
@@ -186,6 +191,11 @@ public class ScheduledTasks {
             log.debug("自动灌溉功能未启用");
             return;
         }
+        // 重叠守卫：上一次检查还没跑完就跳过本次，避免并发重复下发水泵命令
+        if (!irrigationChecking.compareAndSet(false, true)) {
+            log.debug("[自动灌溉] 上一次检查仍在进行，跳过本次");
+            return;
+        }
 
         try {
             boolean currentPumpState = getCurrentPumpState();
@@ -200,6 +210,8 @@ public class ScheduledTasks {
 
         } catch (Exception e) {
             log.error("[自动灌溉] 检查失败", e);
+        } finally {
+            irrigationChecking.set(false);
         }
     }
 
@@ -259,11 +271,19 @@ public class ScheduledTasks {
     private void checkAndStopIrrigation() {
         // 1. 检查超时
         long now = Instant.now().toEpochMilli();
-        long elapsedMinutes = (now - pumpOnTimestamp) / 60000;
-        if (elapsedMinutes >= maxIrrigationDurationMinutes) {
-            log.warn("[自动灌溉超时] 水泵已运行 {} 分钟，强制关闭", elapsedMinutes);
-            stopPump("达到最大运行时长");
-            return;
+        if (pumpOnTimestamp == 0) {
+            // 水泵由外部(手动/巡检规则)开启，无开始时间戳。
+            // 若直接用 (now - 0)/60000 会得到 epoch 级别的巨大分钟数，下个5分钟周期就误判超时强关。
+            // 这里从当前时刻起开始计时，给足完整的最大运行时长。
+            pumpOnTimestamp = now;
+            log.info("[自动灌溉] 检测到水泵已开启但无开始时间戳(外部触发)，从当前时刻开始计时");
+        } else {
+            long elapsedMinutes = (now - pumpOnTimestamp) / 60000;
+            if (elapsedMinutes >= maxIrrigationDurationMinutes) {
+                log.warn("[自动灌溉超时] 水泵已运行 {} 分钟，强制关闭", elapsedMinutes);
+                stopPump("达到最大运行时长");
+                return;
+            }
         }
 
         // 2. 检查所有农田是否都已恢复

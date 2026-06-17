@@ -130,14 +130,11 @@ export default {
         password: ''
       },
       pass: {},
-      code: '',
       dialogFormVisible: false,
       logging: false,
       resetLoading: false,
       resetStep: 1,
       securityQuestion: '',
-      identifyCode: '',
-      identifyCodes: '3456789ABCDEFGHGKMNPQRSTUVWXY',
       rules: {
         username: [
           { required: true, message: '请输入用户名', trigger: 'blur' }
@@ -151,7 +148,6 @@ export default {
   },
   mounted() {
     resetRouter()
-    this.refreshCode()
   },
   methods: {
     login() {
@@ -174,15 +170,6 @@ export default {
           this.logging = false
         })
       })
-    },
-    refreshCode() {
-      this.identifyCode = ''
-      this.makeCode(this.identifyCodes, 4)
-    },
-    makeCode(o, l) {
-      for (let i = 0; i < l; i++) {
-        this.identifyCode += o[Math.floor(Math.random() * o.length)]
-      }
     },
     handlePass() {
       this.dialogFormVisible = true

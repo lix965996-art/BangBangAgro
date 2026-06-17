@@ -195,10 +195,6 @@ public class InventoryController {
         return Result.success();
     }
 
-    private User getUser() {
-        return TokenUtils.getCurrentUser();
-    }
-
     @Autowired
     private com.farmland.intel.mapper.InventoryOutboundMapper inventoryOutboundMapper;
 

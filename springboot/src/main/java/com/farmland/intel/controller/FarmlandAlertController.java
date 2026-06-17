@@ -193,7 +193,10 @@ public class FarmlandAlertController {
             return Result.error("503", "callback endpoint not configured: set IOT_CALLBACK_SECRET");
         }
         String secret = request.getHeader("X-Alert-Callback-Secret");
-        if (!iotCallbackSecret.equals(secret)) {
+        // 常量时间比较，避免 String.equals 提前返回带来的时序侧信道泄露密钥
+        if (secret == null || !java.security.MessageDigest.isEqual(
+                iotCallbackSecret.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                secret.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
             return Result.error("403", "callback secret mismatch");
         }
         if (body == null || body.isEmpty()) {

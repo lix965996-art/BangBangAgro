@@ -405,10 +405,6 @@ export default {
         this.memoryActionBusy = false;
       }
     },
-    // 简单的文本换行处理
-    formatText(text) {
-      return text.replace(/\n/g, '<br>');
-    },
     // 滚动到底部
     scrollToBottom() {
       this.$nextTick(() => {
@@ -715,53 +711,6 @@ export default {
       if (this.recognition && this.isRecording) {
         this.recognition.stop();
         this.isRecording = false;
-      }
-    },
-    
-    // 根据动作类型返回按钮样式类
-    getActionButtonClass(action) {
-      if (!action) return 'device-btn';
-      switch (action.type) {
-        case 'delete_farm':
-          return 'device-btn danger-btn';
-        case 'create_farm':
-          return 'device-btn success-btn';
-        default:
-          return 'device-btn';
-      }
-    },
-    
-    // 根据动作类型返回按钮图标
-    getActionButtonIcon(action) {
-      if (!action) return 'el-icon-check';
-      switch (action.type) {
-        case 'delete_farm':
-          return 'el-icon-delete';
-        case 'create_farm':
-          return 'el-icon-plus';
-        case 'irrigation_on':
-        case 'irrigation_off':
-          return 'el-icon-water-cup';
-        case 'led_on':
-        case 'led_off':
-          return 'el-icon-sunny';
-        case 'drone_spray':
-          return 'el-icon-position';
-        default:
-          return 'el-icon-check';
-      }
-    },
-    
-    // 根据动作类型返回按钮文字
-    getActionButtonText(action) {
-      if (!action) return '确认执行';
-      switch (action.type) {
-        case 'delete_farm':
-          return '确认删除';
-        case 'create_farm':
-          return '确认创建';
-        default:
-          return '确认执行';
       }
     },
     

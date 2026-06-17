@@ -72,6 +72,9 @@ public class AutoPatrolService {
     /** P1 改造: 事件驱动巡检累计次数(运维观察用) */
     private volatile int eventDrivenPatrolCount = 0;
 
+    /** M2: 自动巡检统一并发守卫——定时与事件驱动互斥执行,避免两者重叠重复下发设备命令/重复任务。手动触发不受此限。 */
+    private final AtomicBoolean patrolBusy = new AtomicBoolean(false);
+
     // ── 依赖 ──
     @Autowired
     private IStatisticService statisticService;
@@ -124,7 +127,16 @@ public class AutoPatrolService {
             log.debug("【无人农场】自主巡检已禁用，跳过本次定时巡检");
             return;
         }
-        doPatrol("scheduled");
+        // M2: 与事件驱动巡检互斥，已有巡检在执行就跳过本次定时兜底
+        if (!patrolBusy.compareAndSet(false, true)) {
+            log.debug("【无人农场】已有巡检在执行，跳过本次定时巡检");
+            return;
+        }
+        try {
+            doPatrol("scheduled");
+        } finally {
+            patrolBusy.set(false);
+        }
     }
 
     /**
@@ -149,6 +161,11 @@ public class AutoPatrolService {
         long now = System.currentTimeMillis();
         if (now - lastEventDrivenPatrolMs < eventDrivenCooldownMs) {
             log.debug("【事件驱动巡检】冷却中(剩余 {} ms),跳过本次", eventDrivenCooldownMs - (now - lastEventDrivenPatrolMs));
+            return;
+        }
+        // M2: 与定时巡检互斥，已有巡检在执行就跳过，避免重复下发设备命令
+        if (!patrolBusy.compareAndSet(false, true)) {
+            log.debug("【事件驱动巡检】已有巡检在执行，跳过本次");
             return;
         }
         lastEventDrivenPatrolMs = now;
@@ -183,6 +200,8 @@ public class AutoPatrolService {
                     eventDrivenPatrolCount, farms.size(), actionCount);
         } catch (Exception e) {
             log.warn("【事件驱动巡检】#{} 失败(不影响定时兜底): {}", eventDrivenPatrolCount, e.getMessage());
+        } finally {
+            patrolBusy.set(false);  // M2: 始终释放守卫，防异常卡死
         }
     }
 

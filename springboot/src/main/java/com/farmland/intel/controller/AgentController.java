@@ -68,6 +68,10 @@ public class AgentController {
         List<Map<String, Object>> history = null;
         if (payload != null && payload.get("history") instanceof List) {
             history = (List<Map<String, Object>>) payload.get("history");
+            // L6: 限制客户端传入的历史轮数，缩小伪造 assistant 轮次的提示注入面(只保留最近20轮)
+            if (history != null && history.size() > 20) {
+                history = history.subList(history.size() - 20, history.size());
+            }
         }
 
         // mode: "agent"（默认，主推理模型+工具）| "chat"（对话模型，轻量快速）
