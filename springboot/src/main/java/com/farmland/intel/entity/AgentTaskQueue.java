@@ -27,6 +27,9 @@ public class AgentTaskQueue implements Serializable {
     /** 关联的决策链ID */
     private String chainId;
 
+    /** 发起用户 ID（用于按用户隔离待审批列表与去重） */
+    private Integer userId;
+
     /** 任务类型: irrigation / led / notification / purchase / inspection */
     private String taskType;
 

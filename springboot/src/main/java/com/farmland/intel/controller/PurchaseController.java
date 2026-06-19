@@ -39,11 +39,22 @@ public class PurchaseController {
     // 新增或者更新
     @PostMapping
     public Result save(@RequestBody Purchase purchase) {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
         if (purchase.getId() == null) {
             // 自动填充采购员
-            User currentUser = TokenUtils.getCurrentUser();
-            if (currentUser != null) {
-                purchase.setPurchaser(currentUser.getUsername());
+            purchase.setPurchaser(currentUser.getUsername());
+        } else {
+            // 更新：校验归属，防越权修改他人记录
+            Purchase existing = purchaseService.getById(purchase.getId());
+            if (existing == null) {
+                return Result.error("404", "记录不存在");
+            }
+            if (!"ROLE_ADMIN".equals(currentUser.getRole())
+                    && !currentUser.getUsername().equals(existing.getPurchaser())) {
+                return Result.error("403", "无权修改该记录");
             }
         }
         purchaseService.saveOrUpdate(purchase);
@@ -53,7 +64,10 @@ public class PurchaseController {
     @DeleteMapping("/{id}")
     public Result delete(@PathVariable Integer id) {
         User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             Purchase entity = purchaseService.getById(id);
             if (entity == null) {
                 return Result.error("404", "记录不存在");
@@ -72,7 +86,10 @@ public class PurchaseController {
             return Result.error("400", "删除ID列表不能为空");
         }
         User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             List<Purchase> entities = purchaseService.listByIds(ids);
             for (Purchase entity : entities) {
                 if (!currentUser.getUsername().equals(entity.getPurchaser())) {
@@ -86,10 +103,13 @@ public class PurchaseController {
 
     @GetMapping
     public Result findAll() {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
         QueryWrapper<Purchase> queryWrapper = new QueryWrapper<>();
         // 非管理员只能查看自己的采购记录
-        User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             queryWrapper.eq("purchaser", currentUser.getUsername());
         }
         return Result.success(purchaseService.list(queryWrapper));
@@ -97,25 +117,40 @@ public class PurchaseController {
 
     @GetMapping("/{id}")
     public Result findOne(@PathVariable Integer id) {
-        return Result.success(purchaseService.getById(id));
+        Purchase entity = purchaseService.getById(id);
+        if (entity == null) {
+            return Result.error("404", "记录不存在");
+        }
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())
+                && !currentUser.getUsername().equals(entity.getPurchaser())) {
+            return Result.error("403", "无权限查看该记录");
+        }
+        return Result.success(entity);
     }
 
     @GetMapping("/page")
     public Result findPage(@RequestParam(defaultValue = "") String product,
                            @RequestParam Integer pageNum,
                            @RequestParam Integer pageSize){
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
         QueryWrapper<Purchase> queryWrapper = new QueryWrapper<>();
         queryWrapper.orderByDesc("id");
         if (!"".equals(product)) {
             queryWrapper.like("product", product);
         }
-        
+
         // 数据权限控制：非管理员只能看自己的
-        User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             queryWrapper.eq("purchaser", currentUser.getUsername());
         }
-        
+
         return Result.success(purchaseService.page(new Page<>(pageNum, pageSize), queryWrapper));
     }
 
@@ -124,6 +159,11 @@ public class PurchaseController {
     */
     @GetMapping("/export")
     public void export(HttpServletResponse response) throws Exception {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            response.setStatus(401);
+            return;
+        }
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8");
         String fileName = URLEncoder.encode("Purchase信息表", "UTF-8");
         response.setHeader("Content-Disposition", "attachment;filename=" + fileName + ".xlsx");
@@ -136,8 +176,7 @@ public class PurchaseController {
 
             // 数据权限控制：非管理员只能导出自己的
             QueryWrapper<Purchase> exportQw = new QueryWrapper<>();
-            User currentUser = TokenUtils.getCurrentUser();
-            if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+            if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
                 exportQw.eq("purchaser", currentUser.getUsername());
             }
 

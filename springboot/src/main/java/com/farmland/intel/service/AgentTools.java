@@ -13,6 +13,8 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
+import com.farmland.intel.utils.TokenUtils;
+
 /**
  * Spring AI @Tool 注解方法，替代 AgentService 中手动 JSON 工具定义和 switch 分发。
  * 框架自动生成 JSON Schema 并处理 Function Calling 调度。
@@ -31,6 +33,8 @@ public class AgentTools {
     private final INoticeService noticeService;
     private final IOnlineSaleService onlineSaleService;
     private final IKnowledgeService knowledgeService;
+    private final IAgentTaskQueueService taskQueueService;
+    private final IAiConfigService aiConfigService;
 
     public AgentTools(IStatisticService statisticService,
                       ObjectProvider<IOneNetService> oneNetServiceProvider,
@@ -41,7 +45,9 @@ public class AgentTools {
                       IRoleService roleService,
                       INoticeService noticeService,
                       IOnlineSaleService onlineSaleService,
-                      IKnowledgeService knowledgeService) {
+                      IKnowledgeService knowledgeService,
+                      IAgentTaskQueueService taskQueueService,
+                      IAiConfigService aiConfigService) {
         this.statisticService = statisticService;
         this.oneNetService = oneNetServiceProvider.getIfAvailable();
         this.salesService = salesService;
@@ -52,6 +58,8 @@ public class AgentTools {
         this.noticeService = noticeService;
         this.onlineSaleService = onlineSaleService;
         this.knowledgeService = knowledgeService;
+        this.taskQueueService = taskQueueService;
+        this.aiConfigService = aiConfigService;
     }
 
     // ==================== 查询工具 (Query Tools) ====================
@@ -442,11 +450,15 @@ public class AgentTools {
         }
         try {
             if ("on".equalsIgnoreCase(action)) {
-                oneNetService.controlPump(true);
-                return "{\"success\": true, \"action\": \"irrigation_on\", \"farm\": \"" + (farmName != null ? farmName : "默认农田") + "\"}";
+                boolean ok = oneNetService.controlPump(true);
+                return ok
+                        ? "{\"success\": true, \"action\": \"irrigation_on\", \"farm\": \"" + (farmName != null ? farmName : "默认农田") + "\"}"
+                        : "{\"success\": false, \"action\": \"irrigation_on\", \"error\": \"OneNET 拒绝或下发失败\"}";
             } else if ("off".equalsIgnoreCase(action)) {
-                oneNetService.controlPump(false);
-                return "{\"success\": true, \"action\": \"irrigation_off\", \"farm\": \"" + (farmName != null ? farmName : "默认农田") + "\"}";
+                boolean ok = oneNetService.controlPump(false);
+                return ok
+                        ? "{\"success\": true, \"action\": \"irrigation_off\", \"farm\": \"" + (farmName != null ? farmName : "默认农田") + "\"}"
+                        : "{\"success\": false, \"action\": \"irrigation_off\", \"error\": \"OneNET 拒绝或下发失败\"}";
             }
             return "{\"error\": \"无效操作: " + action + "\"}";
         } catch (Exception e) {
@@ -463,11 +475,15 @@ public class AgentTools {
         }
         try {
             if ("on".equalsIgnoreCase(action)) {
-                oneNetService.controlLed(true);
-                return "{\"success\": true, \"action\": \"led_on\", \"farm\": \"" + (farmName != null ? farmName : "默认农田") + "\"}";
+                boolean ok = oneNetService.controlLed(true);
+                return ok
+                        ? "{\"success\": true, \"action\": \"led_on\", \"farm\": \"" + (farmName != null ? farmName : "默认农田") + "\"}"
+                        : "{\"success\": false, \"action\": \"led_on\", \"error\": \"OneNET 拒绝或下发失败\"}";
             } else if ("off".equalsIgnoreCase(action)) {
-                oneNetService.controlLed(false);
-                return "{\"success\": true, \"action\": \"led_off\", \"farm\": \"" + (farmName != null ? farmName : "默认农田") + "\"}";
+                boolean ok = oneNetService.controlLed(false);
+                return ok
+                        ? "{\"success\": true, \"action\": \"led_off\", \"farm\": \"" + (farmName != null ? farmName : "默认农田") + "\"}"
+                        : "{\"success\": false, \"action\": \"led_off\", \"error\": \"OneNET 拒绝或下发失败\"}";
             }
             return "{\"error\": \"无效操作: " + action + "\"}";
         } catch (Exception e) {
@@ -475,7 +491,7 @@ public class AgentTools {
         }
     }
 
-    @Tool(description = "创建物资采购订单。当检测到库存不足时，AI可以自动创建采购订单补充物资")
+    @Tool(description = "创建物资采购订单。当检测到库存不足时，AI可以自动创建采购订单补充物资。注意：采购=高风险，半审批/全审批模式下会提交等用户确认，不会立即下单。")
     public String createPurchaseOrder(
             @ToolParam(description = "采购物资名称，如：有机肥料、农药、种子等") String product,
             @ToolParam(description = "采购数量") int number,
@@ -484,20 +500,15 @@ public class AgentTools {
         if (purchaseService == null) {
             return "{\"error\": \"采购服务未配置\"}";
         }
-        try {
-            Purchase purchase = new Purchase();
-            purchase.setProduct(product);
-            purchase.setNumber(number);
-            purchase.setProvider(provider);
-            purchase.setPrice(new BigDecimal(String.valueOf(price)));
-            purchaseService.save(purchase);
-            return "{\"success\": true, \"message\": \"采购订单已创建: " + product + " x" + number + "\"}";
-        } catch (Exception e) {
-            return "{\"error\": \"创建采购订单失败: " + e.getMessage() + "\"}";
-        }
+        JSONObject params = new JSONObject();
+        params.put("product", product);
+        params.put("number", number);
+        params.put("provider", provider);
+        params.put("price", price);
+        return dispatchWrite("create_purchase", params, "AI创建采购订单: " + product + " x" + number);
     }
 
-    @Tool(description = "创建农产品销售订单。记录农产品销售信息")
+    @Tool(description = "创建农产品销售订单。记录农产品销售信息。注意：销售=高风险，半审批/全审批模式下会提交等用户确认。")
     public String createSalesOrder(
             @ToolParam(description = "销售产品名称") String product,
             @ToolParam(description = "销售数量") int number,
@@ -506,20 +517,15 @@ public class AgentTools {
         if (salesService == null) {
             return "{\"error\": \"销售服务未配置\"}";
         }
-        try {
-            Sales sale = new Sales();
-            sale.setProduct(product);
-            sale.setNumber(number);
-            sale.setBuyer(buyer);
-            sale.setPrice(new BigDecimal(String.valueOf(price)));
-            salesService.save(sale);
-            return "{\"success\": true, \"message\": \"销售订单已创建: " + product + " x" + number + "\"}";
-        } catch (Exception e) {
-            return "{\"error\": \"创建销售订单失败: " + e.getMessage() + "\"}";
-        }
+        JSONObject params = new JSONObject();
+        params.put("product", product);
+        params.put("number", number);
+        params.put("buyer", buyer);
+        params.put("price", price);
+        return dispatchWrite("create_sale", params, "AI创建销售订单: " + product + " x" + number);
     }
 
-    @Tool(description = "更新仓库库存数量。可以增加或减少库存")
+    @Tool(description = "更新仓库库存数量。可以增加或减少库存。库存调整=中风险，半审批模式下通常自动执行。")
     public String updateInventory(
             @ToolParam(description = "物资名称") String product,
             @ToolParam(description = "库存变化量（正数=增加，负数=减少）") int change,
@@ -527,33 +533,14 @@ public class AgentTools {
         if (inventoryService == null) {
             return "{\"error\": \"库存服务未配置\"}";
         }
-        try {
-            // 查找现有库存
-            List<Inventory> list = inventoryService.list();
-            Inventory target = null;
-            for (Inventory inv : list) {
-                if (product.equals(inv.getProduce())) {
-                    target = inv;
-                    break;
-                }
-            }
-            if (target != null) {
-                int newNumber = (target.getNumber() != null ? target.getNumber() : 0) + change;
-                target.setNumber(Math.max(0, newNumber));
-                inventoryService.updateById(target);
-            } else {
-                Inventory inv = new Inventory();
-                inv.setProduce(product);
-                inv.setNumber(Math.max(0, change));
-                inventoryService.save(inv);
-            }
-            return "{\"success\": true, \"message\": \"库存已更新: " + product + " 变化" + (change > 0 ? "+" : "") + change + "\"}";
-        } catch (Exception e) {
-            return "{\"error\": \"更新库存失败: " + e.getMessage() + "\"}";
-        }
+        JSONObject params = new JSONObject();
+        params.put("product", product);
+        params.put("change", change);
+        params.put("reason", reason);
+        return dispatchWrite("update_inventory", params, "AI更新库存: " + product + " 变化" + (change > 0 ? "+" : "") + change);
     }
 
-    @Tool(description = "向系统用户发送通知消息。当发现重要问题或需要提醒时使用")
+    @Tool(description = "向系统用户发送通知消息。当发现重要问题或需要提醒时使用。通知=低风险，通常自动发送。")
     public String sendNotification(
             @ToolParam(description = "通知标题") String title,
             @ToolParam(description = "通知内容") String content,
@@ -561,14 +548,183 @@ public class AgentTools {
         if (noticeService == null) {
             return "{\"error\": \"通知服务未配置\"}";
         }
+        JSONObject params = new JSONObject();
+        params.put("title", title);
+        params.put("content", content);
+        params.put("level", level);
+        return dispatchWrite("send_notification", params, "AI发送通知: " + title);
+    }
+
+    // ==================== 写操作审批分发器 ====================
+
+    /** 每个写动作的风险等级：high=花钱/收钱，medium=可逆改库存，low=发通知 */
+    private static final Map<String, String> ACTION_RISK = Map.of(
+            "create_purchase", "high",
+            "create_sale", "high",
+            "update_inventory", "medium",
+            "send_notification", "low");
+
+    /**
+     * 写操作统一入口：按当前用户的审批策略决定 立即执行 / 入队等审批。
+     *  full_auto=全部立即；full_approval=全部入队；semi_approval=low/medium立即，high入队。
+     *  自动与入队都落 agent_task_queue 一条记录，作为完整审计链。
+     */
+    private String dispatchWrite(String actionType, JSONObject params, String reasoning) {
+        User user = TokenUtils.getCurrentUser();
+        if (user == null) {
+            return "{\"success\": false, \"error\": \"未登录，AI 无法执行写操作\"}";
+        }
+        if (taskQueueService == null) {
+            return "{\"success\": false, \"error\": \"任务队列服务未配置\"}";
+        }
+        String policy = resolvePolicy(user.getId());
+        String risk = ACTION_RISK.getOrDefault(actionType, "high");
+        boolean auto = decideAuto(policy, risk);
+        String paramsJson = params.toString();
+
+        if (auto) {
+            String result = executeAction(actionType, params);
+            boolean failed = result != null && result.contains("\"error\"");
+            // 审计：落一条记录留痕每一次 AI 写操作（自动执行也要可追溯）
+            try {
+                AgentTaskQueue task = taskQueueService.createTask(
+                        null, taskTypeOf(actionType), priorityOf(risk), risk, true,
+                        params.getStr("farm"), actionType, paramsJson, reasoning, null, null);
+                task.setUserId(user.getId());
+                taskQueueService.updateById(task);
+                if (failed) {
+                    taskQueueService.markFailed(task.getTaskId(), result);
+                } else {
+                    taskQueueService.markCompleted(task.getTaskId(), result);
+                }
+            } catch (Exception auditEx) {
+                log.warn("AI写操作审计落库失败: {}", auditEx.getMessage());
+            }
+            return failed ? result
+                    : "{\"success\": true, \"mode\": \"auto\", \"action\": \"" + actionType + "\", \"result\": " + result + "}";
+        }
+
+        // 入队等审批：先去重，防 LLM 反复提交相同任务
+        if (taskQueueService.hasPendingDuplicate(user.getId(), actionType, paramsJson)) {
+            return "{\"success\": false, \"mode\": \"duplicate\", \"message\": \"相同任务已提交审批，待确认，无需重复提交\"}";
+        }
         try {
-            Notice notice = new Notice();
-            notice.setName(title);
-            notice.setContent(content);
-            noticeService.save(notice);
-            return "{\"success\": true, \"message\": \"通知已发送: " + title + "\"}";
+            AgentTaskQueue task = taskQueueService.createTask(
+                    null, taskTypeOf(actionType), priorityOf(risk), risk, false,
+                    params.getStr("farm"), actionType, paramsJson, reasoning, null, null);
+            task.setUserId(user.getId());
+            taskQueueService.updateById(task);
+            return "{\"success\": true, \"mode\": \"pending_approval\", \"taskId\": \"" + task.getTaskId()
+                    + "\", \"action\": \"" + actionType + "\", \"message\": \"已按你的审批策略提交，等待确认后执行\"}";
         } catch (Exception e) {
-            return "{\"error\": \"发送通知失败: " + e.getMessage() + "\"}";
+            return "{\"success\": false, \"error\": \"提交审批失败: " + e.getMessage() + "\"}";
+        }
+    }
+
+    /** 读取当前用户审批策略，缺失/异常一律回退 semi_approval */
+    private String resolvePolicy(Integer userId) {
+        if (aiConfigService == null) return "semi_approval";
+        try {
+            AiConfig cfg = aiConfigService.getByUserId(userId);
+            String p = cfg != null ? cfg.getAiActionPolicy() : null;
+            if (p == null || p.isBlank()) return "semi_approval";
+            return p;
+        } catch (Exception e) {
+            return "semi_approval";
+        }
+    }
+
+    private boolean decideAuto(String policy, String risk) {
+        if ("full_auto".equals(policy)) return true;
+        if ("full_approval".equals(policy)) return false;
+        return !"high".equals(risk); // semi_approval
+    }
+
+    private String taskTypeOf(String actionType) {
+        switch (actionType) {
+            case "create_purchase": return "purchase";
+            case "create_sale": return "sales";
+            case "update_inventory": return "inventory";
+            case "send_notification": return "notification";
+            default: return actionType;
+        }
+    }
+
+    private String priorityOf(String risk) {
+        switch (risk) {
+            case "high": return "high";
+            case "medium": return "medium";
+            default: return "low";
+        }
+    }
+
+    /**
+     * 真正执行写动作（自动执行 + 审批通过后执行 都走这里）。
+     * actionType → 对应 service 调用，参数从 params(JSON) 取。
+     */
+    public String executeAction(String actionType, JSONObject p) {
+        if (p == null) p = new JSONObject();
+        try {
+            switch (actionType) {
+                case "create_purchase": {
+                    if (purchaseService == null) return "{\"error\": \"采购服务未配置\"}";
+                    Purchase purchase = new Purchase();
+                    purchase.setProduct(p.getStr("product"));
+                    purchase.setNumber(p.getInt("number"));
+                    purchase.setProvider(p.getStr("provider"));
+                    Double price = p.getDouble("price");
+                    purchase.setPrice(price != null ? new BigDecimal(String.valueOf(price)) : BigDecimal.ZERO);
+                    purchaseService.save(purchase);
+                    return "{\"success\": true, \"message\": \"采购订单已创建: " + p.getStr("product") + " x" + p.getInt("number") + "\"}";
+                }
+                case "create_sale": {
+                    if (salesService == null) return "{\"error\": \"销售服务未配置\"}";
+                    Sales sale = new Sales();
+                    sale.setProduct(p.getStr("product"));
+                    sale.setNumber(p.getInt("number"));
+                    sale.setBuyer(p.getStr("buyer"));
+                    Double price = p.getDouble("price");
+                    sale.setPrice(price != null ? new BigDecimal(String.valueOf(price)) : BigDecimal.ZERO);
+                    salesService.save(sale);
+                    return "{\"success\": true, \"message\": \"销售订单已创建: " + p.getStr("product") + " x" + p.getInt("number") + "\"}";
+                }
+                case "update_inventory": {
+                    if (inventoryService == null) return "{\"error\": \"库存服务未配置\"}";
+                    String product = p.getStr("product");
+                    int change = p.getInt("change", 0);
+                    List<Inventory> list = inventoryService.list();
+                    Inventory target = null;
+                    for (Inventory inv : list) {
+                        if (product != null && product.equals(inv.getProduce())) {
+                            target = inv;
+                            break;
+                        }
+                    }
+                    if (target != null) {
+                        int newNumber = (target.getNumber() != null ? target.getNumber() : 0) + change;
+                        target.setNumber(Math.max(0, newNumber));
+                        inventoryService.updateById(target);
+                    } else {
+                        Inventory inv = new Inventory();
+                        inv.setProduce(product);
+                        inv.setNumber(Math.max(0, change));
+                        inventoryService.save(inv);
+                    }
+                    return "{\"success\": true, \"message\": \"库存已更新: " + product + " 变化" + (change > 0 ? "+" : "") + change + "\"}";
+                }
+                case "send_notification": {
+                    if (noticeService == null) return "{\"error\": \"通知服务未配置\"}";
+                    Notice notice = new Notice();
+                    notice.setName(p.getStr("title"));
+                    notice.setContent(p.getStr("content"));
+                    noticeService.save(notice);
+                    return "{\"success\": true, \"message\": \"通知已发送: " + p.getStr("title") + "\"}";
+                }
+                default:
+                    return "{\"error\": \"未知动作类型: " + actionType + "\"}";
+            }
+        } catch (Exception e) {
+            return "{\"error\": \"执行失败: " + e.getMessage() + "\"}";
         }
     }
 

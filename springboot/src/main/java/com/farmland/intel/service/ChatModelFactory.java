@@ -128,6 +128,9 @@ public class ChatModelFactory {
     }
 
     private String buildCacheKey(AiConfig aiConfig) {
-        return aiConfig.getUserId() + ":" + aiConfig.getProvider() + ":" + aiConfig.getModelName();
+        // key 含 baseUrl+apiKey 哈希：用户轮换 key / 切 baseUrl 后自动构建新 client，不再命中旧凭证
+        String credHash = Integer.toHexString(
+                (aiConfig.getBaseUrl() + ":" + aiConfig.getApiKey()).hashCode());
+        return aiConfig.getUserId() + ":" + aiConfig.getProvider() + ":" + aiConfig.getModelName() + ":" + credHash;
     }
 }

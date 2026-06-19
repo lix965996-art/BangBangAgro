@@ -29,6 +29,21 @@ public interface IAgentTaskQueueService extends IService<AgentTaskQueue> {
     List<AgentTaskQueue> getPendingApprovalTasks(int limit);
 
     /**
+     * 按 taskId 取单条任务
+     */
+    AgentTaskQueue getByTaskId(String taskId);
+
+    /**
+     * 同用户是否已存在相同的 pending 任务（去重，防 LLM 重复入队）
+     */
+    boolean hasPendingDuplicate(Integer userId, String actionType, String actionParams);
+
+    /**
+     * 当前用户的待审批任务（按用户隔离）
+     */
+    List<AgentTaskQueue> getPendingApprovalTasksByUser(Integer userId, int limit);
+
+    /**
      * 审批任务
      */
     boolean approveTask(String taskId, Integer approvedBy);

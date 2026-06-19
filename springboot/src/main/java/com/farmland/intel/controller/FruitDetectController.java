@@ -4,6 +4,7 @@ import com.farmland.intel.common.Result;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -77,14 +78,14 @@ public class FruitDetectController {
             body.add("file", fileResource);
 
             HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
-            ResponseEntity<Map> response = restTemplate.exchange(
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     buildPythonApiUrl("/detect/ripeness"),
                     HttpMethod.POST,
                     requestEntity,
-                    Map.class
+                    new ParameterizedTypeReference<Map<String, Object>>() {}
             );
 
-            Map responseBody = response.getBody();
+            Map<String, Object> responseBody = response.getBody();
             if (responseBody != null && "200".equals(String.valueOf(responseBody.get("code")))) {
                 return Result.success(responseBody.get("data"));
             }
@@ -100,11 +101,13 @@ public class FruitDetectController {
     @GetMapping("/health")
     public Result healthCheck() {
         try {
-            ResponseEntity<Map> response = restTemplate.getForEntity(
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     buildPythonApiUrl("/health"),
-                    Map.class
+                    HttpMethod.GET,
+                    null,
+                    new ParameterizedTypeReference<Map<String, Object>>() {}
             );
-            Map responseBody = response.getBody();
+            Map<String, Object> responseBody = response.getBody();
             if (responseBody != null && "200".equals(String.valueOf(responseBody.get("code")))) {
                 return Result.success(responseBody.get("data"));
             }

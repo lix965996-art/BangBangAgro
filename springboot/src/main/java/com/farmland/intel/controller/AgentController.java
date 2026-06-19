@@ -8,7 +8,6 @@ import com.farmland.intel.common.Result;
 import com.farmland.intel.entity.AgentDecisionChain;
 import com.farmland.intel.entity.AgentTaskQueue;
 import com.farmland.intel.entity.AgentUserMemory;
-import com.farmland.intel.entity.SensorEvent;
 import com.farmland.intel.entity.User;
 import com.farmland.intel.service.AgentService;
 import com.farmland.intel.service.IAgentDecisionChainService;
@@ -16,7 +15,6 @@ import com.farmland.intel.service.IAgentTaskQueueService;
 import com.farmland.intel.service.IAgentUserMemoryService;
 import com.farmland.intel.service.ISensorEventService;
 import com.farmland.intel.utils.TokenUtils;
-import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
@@ -53,6 +51,9 @@ public class AgentController {
 
     @Autowired(required = false)
     private ISensorEventService sensorEventService;
+
+    @Autowired
+    private com.farmland.intel.service.AgentTools agentTools;
 
     @PostMapping("/plan")
     @SuppressWarnings("unchecked")
@@ -223,18 +224,25 @@ public class AgentController {
     }
 
     /**
-     * 获取待审批任务（高风险、非自动执行）
+     * 获取待审批任务（管理员看全部，普通用户只看自己发起的）
      */
     @GetMapping("/tasks/pending-approval")
     public Result getPendingApprovalTasks(@RequestParam(defaultValue = "20") int limit) {
         if (taskQueueService == null) {
             return Result.error(Constants.CODE_500, "任务队列服务未配置");
         }
-        return Result.success(taskQueueService.getPendingApprovalTasks(limit));
+        User user = TokenUtils.getCurrentUser();
+        if (user == null) {
+            return Result.error(Constants.CODE_401, "未登录");
+        }
+        if ("ROLE_ADMIN".equals(user.getRole())) {
+            return Result.success(taskQueueService.getPendingApprovalTasks(limit));
+        }
+        return Result.success(taskQueueService.getPendingApprovalTasksByUser(user.getId(), limit));
     }
 
     /**
-     * 审批通过任务
+     * 审批通过任务 —— 批准后立即执行真实动作（采购/销售/库存/通知），并落执行结果
      */
     @PostMapping("/task/{taskId}/approve")
     public Result approveTask(@PathVariable String taskId) {
@@ -243,12 +251,45 @@ public class AgentController {
         }
         User user = TokenUtils.getCurrentUser();
         Integer userId = user != null ? user.getId() : null;
+        if (userId == null) {
+            return Result.error(Constants.CODE_401, "未登录");
+        }
+        AgentTaskQueue task = taskQueueService.getByTaskId(taskId);
+        if (task == null) {
+            return Result.error(Constants.CODE_500, "任务不存在");
+        }
+        // 归属校验：非管理员只能审批自己发起的任务
+        if (!"ROLE_ADMIN".equals(user.getRole()) && !userId.equals(task.getUserId())) {
+            return Result.error(Constants.CODE_401, "无权审批该任务");
+        }
+        if (!"pending".equals(task.getTaskStatus())) {
+            return Result.error(Constants.CODE_400, "任务当前状态不允许审批: " + task.getTaskStatus());
+        }
         boolean ok = taskQueueService.approveTask(taskId, userId);
-        return ok ? Result.success("已批准") : Result.error(Constants.CODE_500, "审批失败，任务可能不存在或状态已变更");
+        if (!ok) {
+            return Result.error(Constants.CODE_500, "审批失败，任务可能已变更");
+        }
+        // 执行器：批准后真正执行（之前只改状态=approved，从不执行）
+        taskQueueService.markExecuting(taskId);
+        try {
+            cn.hutool.json.JSONObject params = task.getActionParams() != null
+                    ? new cn.hutool.json.JSONObject(task.getActionParams())
+                    : new cn.hutool.json.JSONObject();
+            String result = agentTools.executeAction(task.getActionType(), params);
+            if (result != null && result.contains("\"error\"")) {
+                taskQueueService.markFailed(taskId, result);
+                return Result.error(Constants.CODE_500, "执行失败: " + result);
+            }
+            taskQueueService.markCompleted(taskId, result);
+            return Result.success("已批准并执行完成");
+        } catch (Exception e) {
+            taskQueueService.markFailed(taskId, e.getMessage());
+            return Result.error(Constants.CODE_500, "执行异常: " + e.getMessage());
+        }
     }
 
     /**
-     * 拒绝任务
+     * 拒绝任务（带归属校验）
      */
     @PostMapping("/task/{taskId}/reject")
     public Result rejectTask(@PathVariable String taskId) {
@@ -257,6 +298,16 @@ public class AgentController {
         }
         User user = TokenUtils.getCurrentUser();
         Integer userId = user != null ? user.getId() : null;
+        if (userId == null) {
+            return Result.error(Constants.CODE_401, "未登录");
+        }
+        AgentTaskQueue task = taskQueueService.getByTaskId(taskId);
+        if (task == null) {
+            return Result.error(Constants.CODE_500, "任务不存在");
+        }
+        if (!"ROLE_ADMIN".equals(user.getRole()) && !userId.equals(task.getUserId())) {
+            return Result.error(Constants.CODE_401, "无权操作该任务");
+        }
         boolean ok = taskQueueService.rejectTask(taskId, userId);
         return ok ? Result.success("已拒绝") : Result.error(Constants.CODE_500, "拒绝失败，任务可能不存在或状态已变更");
     }
@@ -292,8 +343,10 @@ public class AgentController {
         return Result.success(sensorEventService.getUnhandledEvents(limit));
     }
 
-    @Data
     private static class ExecuteRequest {
         private List<AgentAction> actions;
+
+        public List<AgentAction> getActions() { return actions; }
+        public void setActions(List<AgentAction> actions) { this.actions = actions; }
     }
 }

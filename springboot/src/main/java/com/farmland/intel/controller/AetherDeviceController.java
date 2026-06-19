@@ -38,6 +38,15 @@ public class AetherDeviceController {
     private static volatile boolean currentFan = false;
     private static volatile boolean currentBuzzer = false;
     private static volatile boolean currentPump = false;
+
+    // 【写入去重】记录上次落库的值与时间，避免设备状态轮询每 5s 写一行(~1.7万行/天)撑爆历史表
+    private static volatile java.time.LocalDateTime lastReadingTime = null;
+    private static volatile Double lastWrTemperature = null;
+    private static volatile Double lastWrHumidity = null;
+    private static volatile Integer lastWrSoil = null;
+    private static volatile Integer lastWrLed = null;
+    private static volatile Integer lastWrFan = null;
+    private static volatile Integer lastWrBuzzer = null;
     private static volatile boolean deviceOnline = true;
     
     /**
@@ -92,21 +101,40 @@ public class AetherDeviceController {
                     if (data.get("buzzer") == null) data.put("buzzer", currentBuzzer);
                     data.put("pump", currentPump);
 
-                    // 【新增】实时存储到数据库
-                    try {
-                        SensorReading reading = new SensorReading();
-                        reading.setTemperature(currentTemperature);
-                        reading.setHumidity(currentHumidity);
-                        reading.setSoilHumidity(currentSoil);
-                        reading.setLed(currentLed);
-                        reading.setFan(currentFan ? 1 : 0);
-                        reading.setBuzzer(currentBuzzer ? 1 : 0);
-                        reading.setDeviceName("STM32-001");
-                        reading.setCreatedAt(LocalDateTime.now());
-                        sensorReadingMapper.insert(reading);
-                        log.info("[API请求] 实时数据已存入数据库: T={}℃, H={}%, Soil={}%", currentTemperature, currentHumidity, currentSoil);
-                    } catch (Exception e) {
-                        log.error("[API请求] 实时数据存库失败", e);
+                    // 【去重写入】仅当数值变化或距上次写入≥60秒时才落库，避免轮询写放大撑爆历史表
+                    Integer fanVal = currentFan ? 1 : 0;
+                    Integer buzzerVal = currentBuzzer ? 1 : 0;
+                    boolean changed = lastReadingTime == null
+                            || java.time.Duration.between(lastReadingTime, LocalDateTime.now()).getSeconds() >= 60
+                            || !java.util.Objects.equals(lastWrTemperature, currentTemperature)
+                            || !java.util.Objects.equals(lastWrHumidity, currentHumidity)
+                            || !java.util.Objects.equals(lastWrSoil, currentSoil)
+                            || !java.util.Objects.equals(lastWrLed, currentLed)
+                            || !java.util.Objects.equals(lastWrFan, fanVal)
+                            || !java.util.Objects.equals(lastWrBuzzer, buzzerVal);
+                    if (changed) {
+                        try {
+                            SensorReading reading = new SensorReading();
+                            reading.setTemperature(currentTemperature);
+                            reading.setHumidity(currentHumidity);
+                            reading.setSoilHumidity(currentSoil);
+                            reading.setLed(currentLed);
+                            reading.setFan(fanVal);
+                            reading.setBuzzer(buzzerVal);
+                            reading.setDeviceName("STM32-001");
+                            reading.setCreatedAt(LocalDateTime.now());
+                            sensorReadingMapper.insert(reading);
+                            lastReadingTime = reading.getCreatedAt();
+                            lastWrTemperature = currentTemperature;
+                            lastWrHumidity = currentHumidity;
+                            lastWrSoil = currentSoil;
+                            lastWrLed = currentLed;
+                            lastWrFan = fanVal;
+                            lastWrBuzzer = buzzerVal;
+                            log.info("[API请求] 实时数据已存入数据库: T={}℃, H={}%, Soil={}%", currentTemperature, currentHumidity, currentSoil);
+                        } catch (Exception e) {
+                            log.error("[API请求] 实时数据存库失败", e);
+                        }
                     }
 
                     return Result.success(data);
@@ -294,27 +322,6 @@ public class AetherDeviceController {
             log.error("从数据库获取历史数据失败: {}", e.getMessage(), e);
             return Result.error("500", "数据库查询失败: " + e.getMessage());
         }
-    }
-    
-    /**
-     * 生成模拟历史数据
-     */
-    private List<Map<String, Object>> generateMockHistoryData(int days) {
-        List<Map<String, Object>> data = new ArrayList<>();
-        LocalDateTime now = LocalDateTime.now();
-        Random random = new Random();
-        
-        // 每天生成24个数据点（每小时一个）
-        for (int i = days * 24; i >= 0; i--) {
-            Map<String, Object> item = new HashMap<>();
-            LocalDateTime time = now.minusHours(i);
-            item.put("date", time.toString());
-            item.put("temp", 20 + random.nextDouble() * 10); // 20-30度
-            item.put("humi", 50 + random.nextDouble() * 30); // 50-80%
-            data.add(item);
-        }
-        
-        return data;
     }
     
     /**

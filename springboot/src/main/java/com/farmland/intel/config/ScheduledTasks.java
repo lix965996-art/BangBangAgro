@@ -1,6 +1,5 @@
 package com.farmland.intel.config;
 
-import com.farmland.intel.entity.SensorReading;
 import com.farmland.intel.entity.Statistic;
 import com.farmland.intel.event.SensorDataSyncedEvent;
 import com.farmland.intel.mapper.SensorReadingMapper;

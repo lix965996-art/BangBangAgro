@@ -1,8 +1,8 @@
 ALTER TABLE `sys_user`
-  ADD COLUMN IF NOT EXISTS `uid` varchar(20) DEFAULT NULL UNIQUE;
+  ADD COLUMN `uid` varchar(20) DEFAULT NULL UNIQUE;
 
 ALTER TABLE `chat_group`
-  ADD COLUMN IF NOT EXISTS `group_number` varchar(10) DEFAULT NULL UNIQUE;
+  ADD COLUMN `group_number` varchar(10) DEFAULT NULL UNIQUE;
 
 CREATE TABLE IF NOT EXISTS `friendship` (
   `id` int NOT NULL AUTO_INCREMENT,

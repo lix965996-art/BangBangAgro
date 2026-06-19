@@ -59,15 +59,21 @@ public class OnlineSaleController {
             }
         }
 
-        // 自动填充销售员 (仅新增时)
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        // 自动填充销售员 (仅新增时)；更新时校验归属，防越权改他人商品
         if (onlineSale.getId() == null) {
-            try {
-                User currentUser = TokenUtils.getCurrentUser();
-                if (currentUser != null) {
-                    onlineSale.setSeller(currentUser.getUsername());
-                }
-            } catch (Exception e) {
-                // 忽略获取用户失败的情况，避免影响主流程
+            onlineSale.setSeller(currentUser.getUsername());
+        } else {
+            OnlineSale existing = onlineSaleService.getById(onlineSale.getId());
+            if (existing == null) {
+                return Result.error("404", "记录不存在");
+            }
+            if (!"ROLE_ADMIN".equals(currentUser.getRole())
+                    && !currentUser.getUsername().equals(existing.getSeller())) {
+                return Result.error("403", "无权修改该商品");
             }
         }
 
@@ -82,7 +88,10 @@ public class OnlineSaleController {
     @DeleteMapping("/{id}")
     public Result delete(@PathVariable Integer id) {
         User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             OnlineSale entity = onlineSaleService.getById(id);
             if (entity == null) {
                 return Result.error("404", "记录不存在");
@@ -101,7 +110,10 @@ public class OnlineSaleController {
             return Result.error("400", "删除ID列表不能为空");
         }
         User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             List<OnlineSale> entities = onlineSaleService.listByIds(ids);
             for (OnlineSale entity : entities) {
                 if (!currentUser.getUsername().equals(entity.getSeller())) {
@@ -116,10 +128,13 @@ public class OnlineSaleController {
     // 查询全部
     @GetMapping
     public Result findAll() {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
         QueryWrapper<OnlineSale> queryWrapper = new QueryWrapper<>();
         // 非管理员只能查看自己的在线销售记录
-        User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             queryWrapper.eq("seller", currentUser.getUsername());
         }
         return Result.success(onlineSaleService.list(queryWrapper));
@@ -130,12 +145,14 @@ public class OnlineSaleController {
     public Result findOne(@PathVariable Integer id) {
         OnlineSale sale = onlineSaleService.getById(id);
         if (sale == null) return Result.error("404", "记录不存在");
-        // 数据权限控制：非管理员只能查看自己的
         User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
-            if (!currentUser.getUsername().equals(sale.getSeller())) {
-                return Result.error("403", "无权限查看");
-            }
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        // 数据权限控制：非管理员只能查看自己的
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())
+                && !currentUser.getUsername().equals(sale.getSeller())) {
+            return Result.error("403", "无权限查看");
         }
         return Result.success(sale);
     }
@@ -145,13 +162,16 @@ public class OnlineSaleController {
     public Result findPage(@RequestParam(defaultValue = "") String produce,
                            @RequestParam Integer pageNum,
                            @RequestParam Integer pageSize) {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
         QueryWrapper<OnlineSale> queryWrapper = new QueryWrapper<>();
         queryWrapper.like(!"".equals(produce), "produce", produce);
         queryWrapper.orderByDesc("id");
 
         // 数据权限控制：非管理员只能看自己的
-        User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             queryWrapper.eq("seller", currentUser.getUsername());
         }
 
@@ -188,6 +208,11 @@ public class OnlineSaleController {
     // 导出Excel
     @GetMapping("/export")
     public void export(HttpServletResponse response) throws Exception {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            response.setStatus(401);
+            return;
+        }
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8");
         String fileName = URLEncoder.encode("农作物在线销售", "UTF-8");
         response.setHeader("Content-Disposition", "attachment;filename=" + fileName + ".xlsx");
@@ -210,8 +235,7 @@ public class OnlineSaleController {
 
             // 数据权限控制：非管理员只能导出自己的
             QueryWrapper<OnlineSale> exportQw = new QueryWrapper<>();
-            User currentUser = TokenUtils.getCurrentUser();
-            if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+            if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
                 exportQw.eq("seller", currentUser.getUsername());
             }
 

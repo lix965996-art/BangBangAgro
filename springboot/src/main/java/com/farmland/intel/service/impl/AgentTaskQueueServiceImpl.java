@@ -67,6 +67,30 @@ public class AgentTaskQueueServiceImpl extends ServiceImpl<AgentTaskQueueMapper,
     }
 
     @Override
+    public AgentTaskQueue getByTaskId(String taskId) {
+        return getOne(Wrappers.<AgentTaskQueue>lambdaQuery().eq(AgentTaskQueue::getTaskId, taskId));
+    }
+
+    @Override
+    public boolean hasPendingDuplicate(Integer userId, String actionType, String actionParams) {
+        long c = count(Wrappers.<AgentTaskQueue>lambdaQuery()
+                .eq(AgentTaskQueue::getTaskStatus, "pending")
+                .eq(userId != null, AgentTaskQueue::getUserId, userId)
+                .eq(AgentTaskQueue::getActionType, actionType)
+                .eq(AgentTaskQueue::getActionParams, actionParams));
+        return c > 0;
+    }
+
+    @Override
+    public List<AgentTaskQueue> getPendingApprovalTasksByUser(Integer userId, int limit) {
+        return list(Wrappers.<AgentTaskQueue>lambdaQuery()
+                .eq(AgentTaskQueue::getTaskStatus, "pending")
+                .eq(userId != null, AgentTaskQueue::getUserId, userId)
+                .orderByDesc(AgentTaskQueue::getCreatedAt)
+                .last("LIMIT " + limit));
+    }
+
+    @Override
     public boolean approveTask(String taskId, Integer approvedBy) {
         return update(Wrappers.<AgentTaskQueue>lambdaUpdate()
                 .eq(AgentTaskQueue::getTaskId, taskId)

@@ -1,9 +1,11 @@
 package com.farmland.intel.controller;
 
 import com.farmland.intel.common.Result;
+import com.farmland.intel.service.IVisionAnalysisService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
 import org.springframework.util.LinkedMultiValueMap;
@@ -24,6 +26,8 @@ import java.util.Map;
 public class CropAnalysisController {
 
     private static final Logger log = LoggerFactory.getLogger(CropAnalysisController.class);
+    private static final ParameterizedTypeReference<Map<String, Object>> MAP_RESPONSE_TYPE =
+            new ParameterizedTypeReference<Map<String, Object>>() {};
 
     // Python集成检测服务地址
     @Value("${python.api-url:http://localhost:5000}")
@@ -31,6 +35,9 @@ public class CropAnalysisController {
     
     @Resource
     private RestTemplate restTemplate;
+
+    @Resource
+    private IVisionAnalysisService visionAnalysisService;
 
     private String buildPythonApiUrl(String path) {
         String baseUrl = pythonApiUrl == null ? "http://localhost:5000" : pythonApiUrl.trim();
@@ -80,18 +87,18 @@ public class CropAnalysisController {
             HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
 
             // 调用Python成熟度检测API
-            ResponseEntity<Map> response = restTemplate.exchange(
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     buildPythonApiUrl("/detect/ripeness"),
                     HttpMethod.POST,
                     requestEntity,
-                    Map.class
+                    MAP_RESPONSE_TYPE
             );
 
-            Map responseBody = response.getBody();
+            Map<String, Object> responseBody = response.getBody();
             if (responseBody != null && "200".equals(responseBody.get("code"))) {
                 return Result.success(responseBody.get("data"));
             } else {
-                String msg = responseBody != null ? (String) responseBody.get("msg") : "成熟度检测失败";
+                String msg = responseBody != null ? String.valueOf(responseBody.get("msg")) : "成熟度检测失败";
                 return Result.error("500", msg);
             }
 
@@ -145,18 +152,18 @@ public class CropAnalysisController {
             HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
 
             // 调用Python病虫害检测API
-            ResponseEntity<Map> response = restTemplate.exchange(
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     buildPythonApiUrl("/detect/disease"),
                     HttpMethod.POST,
                     requestEntity,
-                    Map.class
+                    MAP_RESPONSE_TYPE
             );
 
-            Map responseBody = response.getBody();
+            Map<String, Object> responseBody = response.getBody();
             if (responseBody != null && "200".equals(responseBody.get("code"))) {
                 return Result.success(responseBody.get("data"));
             } else {
-                String msg = responseBody != null ? (String) responseBody.get("msg") : "病虫害检测失败";
+                String msg = responseBody != null ? String.valueOf(responseBody.get("msg")) : "病虫害检测失败";
                 return Result.error("500", msg);
             }
 
@@ -210,18 +217,18 @@ public class CropAnalysisController {
             HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
 
             // 调用Python双检分析API
-            ResponseEntity<Map> response = restTemplate.exchange(
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     buildPythonApiUrl("/detect/both"),
                     HttpMethod.POST,
                     requestEntity,
-                    Map.class
+                    MAP_RESPONSE_TYPE
             );
 
-            Map responseBody = response.getBody();
+            Map<String, Object> responseBody = response.getBody();
             if (responseBody != null && "200".equals(responseBody.get("code"))) {
                 return Result.success(responseBody.get("data"));
             } else {
-                String msg = responseBody != null ? (String) responseBody.get("msg") : "双检分析失败";
+                String msg = responseBody != null ? String.valueOf(responseBody.get("msg")) : "双检分析失败";
                 return Result.error("500", msg);
             }
 
@@ -232,14 +239,93 @@ public class CropAnalysisController {
     }
 
     /**
+     * 多模态视觉分析 - 一次性综合判读成熟度 + 病虫害 + 多维分析
+     * 不依赖本地 YOLO 服务，覆盖任意作物（可配豆包/Qwen-VL/硅基流动等）。
+     * @param file 上传的图片文件
+     * @param cropType 作物类型提示（可选，模型以实际识别为准）
+     * @return 与「双检」一致结构的结果，额外含 ai_summary / ai_advice
+     */
+    @PostMapping("/llm")
+    public Result analyzeByLlm(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "crop_type", required = false) String cropType) {
+        try {
+            if (file.isEmpty()) {
+                return Result.error("400", "请上传图片文件");
+            }
+            String contentType = file.getContentType();
+            if (contentType == null || !contentType.startsWith("image/")) {
+                return Result.error("400", "只支持图片文件");
+            }
+            if (!visionAnalysisService.isConfigured()) {
+                return Result.error("503", "多模态视觉未配置，请在「个人中心 → AI 模型配置 → 视觉模型」填写，或在后端 application-local.yml 设置 vision.*");
+            }
+            Map<String, Object> data = visionAnalysisService.analyze(file, cropType);
+            return Result.success(data);
+        } catch (Exception e) {
+            log.error("多模态视觉分析失败, cropType={}", cropType, e);
+            return Result.error("500", "多模态分析失败：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 多模态视觉 · 对图自由问答（支持携带历史做追问）。
+     * @param file 当前图片
+     * @param question 用户问题
+     * @param history 之前的问答文本（可选）
+     */
+    @PostMapping("/llm/ask")
+    public Result askByLlm(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam("question") String question,
+            @RequestParam(value = "history", required = false) String history) {
+        try {
+            if (file.isEmpty()) {
+                return Result.error("400", "请上传图片文件");
+            }
+            if (question == null || question.trim().isEmpty()) {
+                return Result.error("400", "请输入问题");
+            }
+            if (!visionAnalysisService.isConfigured()) {
+                return Result.error("503", "多模态视觉未配置，请在「个人中心 → AI 模型配置 → 视觉模型」填写，或在后端 application-local.yml 设置 vision.*");
+            }
+            String answer = visionAnalysisService.ask(file, question, history);
+            Map<String, Object> data = new java.util.HashMap<>();
+            data.put("answer", answer);
+            return Result.success(data);
+        } catch (Exception e) {
+            log.error("多模态视觉问答失败", e);
+            return Result.error("500", "问答失败：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 多模态视觉服务可用性检查（前端据此显示引擎状态徽章）。
+     */
+    @GetMapping("/llm/health")
+    public Result llmHealth() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        boolean configured = visionAnalysisService.isConfigured();
+        data.put("configured", configured);
+        data.put("engine", "vision");
+        data.put("model", visionAnalysisService.modelName());
+        return Result.success(data);
+    }
+
+    /**
      * 获取支持的模型列表
      * @return 模型信息
      */
     @GetMapping("/models")
     public Result getModels() {
         try {
-            ResponseEntity<Map> response = restTemplate.getForEntity(buildPythonApiUrl("/models"), Map.class);
-            Map responseBody = response.getBody();
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+                    buildPythonApiUrl("/models"),
+                    HttpMethod.GET,
+                    HttpEntity.EMPTY,
+                    MAP_RESPONSE_TYPE
+            );
+            Map<String, Object> responseBody = response.getBody();
             if (responseBody != null && "200".equals(responseBody.get("code"))) {
                 return Result.success(responseBody.get("data"));
             }
@@ -255,8 +341,13 @@ public class CropAnalysisController {
     @GetMapping("/health")
     public Result healthCheck() {
         try {
-            ResponseEntity<Map> response = restTemplate.getForEntity(buildPythonApiUrl("/health"), Map.class);
-            Map responseBody = response.getBody();
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+                    buildPythonApiUrl("/health"),
+                    HttpMethod.GET,
+                    HttpEntity.EMPTY,
+                    MAP_RESPONSE_TYPE
+            );
+            Map<String, Object> responseBody = response.getBody();
             if (responseBody != null && "200".equals(responseBody.get("code"))) {
                 return Result.success(responseBody.get("data"));
             }

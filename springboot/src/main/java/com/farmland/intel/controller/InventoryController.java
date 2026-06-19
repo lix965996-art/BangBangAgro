@@ -23,7 +23,6 @@ import com.farmland.intel.utils.TokenUtils;
 import com.farmland.intel.entity.Inventory;
 import org.springframework.beans.factory.annotation.Autowired;
 import java.util.Map;
-import java.util.HashMap;
 
 import org.springframework.web.bind.annotation.RestController;
 
@@ -42,11 +41,22 @@ public class InventoryController {
     // 新增或者更新
     @PostMapping
     public Result save(@RequestBody Inventory inventory) {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
         if (inventory.getId() == null) {
             // 新增时自动填充仓库管理员为当前登录用户
-            User currentUser = TokenUtils.getCurrentUser();
-            if (currentUser != null) {
-                inventory.setKeeper(currentUser.getUsername());
+            inventory.setKeeper(currentUser.getUsername());
+        } else {
+            // 更新：校验归属，防越权修改他人库存
+            Inventory existing = inventoryService.getById(inventory.getId());
+            if (existing == null) {
+                return Result.error("404", "记录不存在");
+            }
+            if (!"ROLE_ADMIN".equals(currentUser.getRole())
+                    && !currentUser.getUsername().equals(existing.getKeeper())) {
+                return Result.error("403", "无权修改该记录");
             }
         }
         inventoryService.saveOrUpdate(inventory);
@@ -78,7 +88,10 @@ public class InventoryController {
             return Result.error("400", "删除ID列表不能为空");
         }
         User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             List<Inventory> entities = (List<Inventory>) inventoryService.listByIds(ids);
             for (Inventory entity : entities) {
                 if (!currentUser.getUsername().equals(entity.getKeeper())) {
@@ -92,10 +105,13 @@ public class InventoryController {
 
     @GetMapping
     public Result findAll() {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
         QueryWrapper<Inventory> queryWrapper = new QueryWrapper<>();
         // 非管理员只能查看自己负责的库存
-        User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             queryWrapper.eq("keeper", currentUser.getUsername());
         }
         return Result.success(inventoryService.list(queryWrapper));
@@ -103,21 +119,36 @@ public class InventoryController {
 
     @GetMapping("/{id}")
     public Result findOne(@PathVariable Integer id) {
-        return Result.success(inventoryService.getById(id));
+        Inventory entity = inventoryService.getById(id);
+        if (entity == null) {
+            return Result.error("404", "记录不存在");
+        }
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())
+                && !currentUser.getUsername().equals(entity.getKeeper())) {
+            return Result.error("403", "无权限查看该记录");
+        }
+        return Result.success(entity);
     }
 
     @GetMapping("/page")
     public Result findPage(@RequestParam(defaultValue = "") String produce,
                            @RequestParam Integer pageNum,
                            @RequestParam Integer pageSize) {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
         QueryWrapper<Inventory> queryWrapper = new QueryWrapper<>();
         queryWrapper.orderByDesc("id");
         if (!"".equals(produce)) {
             queryWrapper.like("produce", produce);
         }
         // 非管理员只能查看自己负责的库存
-        User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             queryWrapper.eq("keeper", currentUser.getUsername());
         }
         return Result.success(inventoryService.page(new Page<>(pageNum, pageSize), queryWrapper));
@@ -128,6 +159,11 @@ public class InventoryController {
     */
     @GetMapping("/export")
     public void export(HttpServletResponse response) throws Exception {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            response.setStatus(401);
+            return;
+        }
         // 设置浏览器响应的格式
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8");
         String fileName = URLEncoder.encode("Inventory信息表", "UTF-8");
@@ -148,8 +184,7 @@ public class InventoryController {
             
             // 构建查询条件（非管理员只能导出自己负责的库存）
             QueryWrapper<Inventory> queryWrapper = new QueryWrapper<>();
-            User currentUser = TokenUtils.getCurrentUser();
-            if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+            if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
                 queryWrapper.eq("keeper", currentUser.getUsername());
             }
             

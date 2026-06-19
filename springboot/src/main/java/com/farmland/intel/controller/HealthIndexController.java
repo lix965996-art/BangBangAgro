@@ -54,9 +54,12 @@ public class HealthIndexController {
     @GetMapping("/calculate/all")
     public Result calculateAllHealthIndex() {
         // 数据权限：非管理员只算自己负责的农田，防越权查看他人农田；并加上限防全表无界扫描
-        QueryWrapper<Statistic> qw = new QueryWrapper<>();
         User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        QueryWrapper<Statistic> qw = new QueryWrapper<>();
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             qw.eq("keeper", currentUser.getUsername());
         }
         qw.last("LIMIT 500");

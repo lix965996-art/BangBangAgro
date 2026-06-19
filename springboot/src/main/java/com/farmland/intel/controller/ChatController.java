@@ -1,14 +1,6 @@
 package com.farmland.intel.controller;
 
-// 1. 注意这里：引入的是通义千问【接口】
 import com.farmland.intel.common.Result;
-import com.farmland.intel.service.IQwenService;
-import com.farmland.intel.service.IOneNetService;
-import com.farmland.intel.mapper.SensorReadingMapper;
-import com.farmland.intel.entity.SensorReading;
-import cn.hutool.http.HttpUtil;
-import cn.hutool.json.JSONObject;
-import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONUtil;
 import com.farmland.intel.entity.AiConfig;
 import com.farmland.intel.service.ChatModelFactory;
@@ -26,7 +18,6 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 
-import java.util.HashMap;
 import java.util.Map;
 
 @RestController
@@ -61,16 +52,6 @@ public class ChatController {
             log.info("High map API keys are configured successfully");
         }
     }
-
-    // 2. 注意这里：注入类型必须是【接口 IQwenService】
-    @Autowired
-    private IQwenService qwenService;
-
-    @Autowired
-    private SensorReadingMapper sensorReadingMapper;
-
-    @Autowired(required = false)
-    private IOneNetService oneNetService;
 
     @Value("${amap.web-key}")
     private String webKey;

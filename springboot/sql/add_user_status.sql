@@ -1,2 +1,0 @@
-ALTER TABLE `sys_user`
-  ADD COLUMN IF NOT EXISTS `status` int NOT NULL DEFAULT 0;

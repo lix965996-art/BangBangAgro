@@ -79,19 +79,25 @@ public class StatisticController {
         }
         
         try {
-            // 设置创建时间（新增时）
+            User currentUser = TokenUtils.getCurrentUser();
+            if (currentUser == null) {
+                return Result.error("401", "未登录");
+            }
             if (statistic.getId() == null) {
                 // 自动设置农田负责人
-                try {
-                    User currentUser = TokenUtils.getCurrentUser();
-                    if (currentUser != null) {
-                        statistic.setKeeper(currentUser.getUsername());
-                    }
-                } catch (Exception e) {
-                    // ignore
+                statistic.setKeeper(currentUser.getUsername());
+            } else {
+                // 更新：校验归属，防越权修改他人农田数据
+                Statistic existing = statisticService.getById(statistic.getId());
+                if (existing == null) {
+                    return Result.error("404", "记录不存在");
+                }
+                if (!"ROLE_ADMIN".equals(currentUser.getRole())
+                        && !currentUser.getUsername().equals(existing.getKeeper())) {
+                    return Result.error("403", "无权修改该记录");
                 }
             }
-            
+
             statisticService.saveOrUpdate(statistic);
             log.info("农田统计数据保存成功，ID: {}", statistic.getId());
             
@@ -119,7 +125,10 @@ public class StatisticController {
     @DeleteMapping("/{id}")
     public Result delete(@PathVariable Integer id) {
         User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             Statistic entity = statisticService.getById(id);
             if (entity == null) {
                 return Result.error("404", "记录不存在");
@@ -141,7 +150,10 @@ public class StatisticController {
             return Result.error("400", "删除ID列表不能为空");
         }
         User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             List<Statistic> entities = (List<Statistic>) statisticService.listByIds(ids);
             for (Statistic entity : entities) {
                 if (!currentUser.getUsername().equals(entity.getKeeper())) {
@@ -155,10 +167,13 @@ public class StatisticController {
 
     @GetMapping
     public Result findAll() {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
         QueryWrapper<Statistic> queryWrapper = new QueryWrapper<>();
         // 非管理员只能查看自己负责的农田
-        User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             queryWrapper.eq("keeper", currentUser.getUsername());
         }
         return Result.success(statisticService.list(queryWrapper));
@@ -166,25 +181,40 @@ public class StatisticController {
 
     @GetMapping("/{id}")
     public Result findOne(@PathVariable Integer id) {
-        return Result.success(statisticService.getById(id));
+        Statistic entity = statisticService.getById(id);
+        if (entity == null) {
+            return Result.error("404", "记录不存在");
+        }
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())
+                && !currentUser.getUsername().equals(entity.getKeeper())) {
+            return Result.error("403", "无权限查看该记录");
+        }
+        return Result.success(entity);
     }
 
     @GetMapping("/page")
     public Result findPage(@RequestParam(defaultValue = "") String farm,
                            @RequestParam Integer pageNum,
                            @RequestParam Integer pageSize) {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
         QueryWrapper<Statistic> queryWrapper = new QueryWrapper<>();
         queryWrapper.orderByDesc("id");
         if (!"".equals(farm)) {
             queryWrapper.like("farm", farm);
         }
-        
+
         // 数据权限控制：非管理员只能看自己负责的农田
-        User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             queryWrapper.eq("keeper", currentUser.getUsername());
         }
-        
+
         return Result.success(statisticService.page(new Page<>(pageNum, pageSize), queryWrapper));
     }
 
@@ -193,6 +223,11 @@ public class StatisticController {
     */
     @GetMapping("/export")
     public void export(HttpServletResponse response) throws Exception {
+        User currentUser = TokenUtils.getCurrentUser();
+        if (currentUser == null) {
+            response.setStatus(401);
+            return;
+        }
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8");
         String fileName = URLEncoder.encode("Statistic信息表", "UTF-8");
         response.setHeader("Content-Disposition", "attachment;filename=" + fileName + ".xlsx");
@@ -228,8 +263,7 @@ public class StatisticController {
 
             // 数据权限控制：非管理员只能导出自己的
             QueryWrapper<Statistic> exportQw = new QueryWrapper<>();
-            User currentUser = TokenUtils.getCurrentUser();
-            if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+            if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
                 exportQw.eq("keeper", currentUser.getUsername());
             }
 
@@ -281,10 +315,13 @@ public class StatisticController {
     @GetMapping("/dashboard")
     public Result getDashboardData() {
         try {
+            User currentUser = TokenUtils.getCurrentUser();
+            if (currentUser == null) {
+                return Result.success(new java.util.ArrayList<>());
+            }
             QueryWrapper<Statistic> queryWrapper = new QueryWrapper<>();
             // 非管理员只能查看自己负责的农田
-            User currentUser = TokenUtils.getCurrentUser();
-            if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+            if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
                 queryWrapper.eq("keeper", currentUser.getUsername());
             }
             List<Statistic> list = statisticService.list(queryWrapper);
@@ -303,10 +340,18 @@ public class StatisticController {
     @GetMapping("/dashboard/summary")
     public Result getDashboardSummary() {
         try {
+            User currentUser = TokenUtils.getCurrentUser();
+            if (currentUser == null) {
+                Map<String, Object> empty = new HashMap<>();
+                empty.put("totalArea", 0);
+                empty.put("totalStock", 0);
+                empty.put("farmCount", 0);
+                empty.put("normalCount", 0);
+                return Result.success(empty);
+            }
             QueryWrapper<Statistic> queryWrapper = new QueryWrapper<>();
             // 非管理员只能查看自己负责的农田
-            User currentUser = TokenUtils.getCurrentUser();
-            if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+            if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
                 queryWrapper.eq("keeper", currentUser.getUsername());
             }
             List<Statistic> list = statisticService.list(queryWrapper);

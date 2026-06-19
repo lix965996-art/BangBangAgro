@@ -48,6 +48,10 @@ public class AiConfigServiceImpl extends ServiceImpl<AiConfigMapper, AiConfig> i
         if (cfg.getApiKey() != null && !cfg.getApiKey().isEmpty()) {
             cfg.setApiKey(CryptoUtils.decrypt(cfg.getApiKey()));
         }
+        // 解密视觉模型 Key
+        if (cfg.getVisionApiKey() != null && !cfg.getVisionApiKey().isEmpty()) {
+            cfg.setVisionApiKey(CryptoUtils.decrypt(cfg.getVisionApiKey()));
+        }
         return cfg;
     }
 
@@ -72,6 +76,10 @@ public class AiConfigServiceImpl extends ServiceImpl<AiConfigMapper, AiConfig> i
         // 加密 API Key 后存储
         if (config.getApiKey() != null && !config.getApiKey().isEmpty()) {
             config.setApiKey(CryptoUtils.encrypt(config.getApiKey()));
+        }
+        // 加密视觉模型 Key 后存储
+        if (config.getVisionApiKey() != null && !config.getVisionApiKey().isEmpty()) {
+            config.setVisionApiKey(CryptoUtils.encrypt(config.getVisionApiKey()));
         }
 
         // 查找已有记录

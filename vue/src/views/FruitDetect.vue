@@ -2,39 +2,31 @@
   <div class="fruit-detect-container">
     <el-row :gutter="20" class="summary-cards">
       <el-col :span="8">
-        <el-card shadow="hover" class="stat-card sage-green-gradient">
-          <div class="card-content">
-            <i class="el-icon-picture-outline-round stat-icon"></i>
-            <div class="text-group">
-              <span class="stat-label">今日识别对象总数</span>
-              <span class="stat-value">{{ allDetections.length || 0 }}<span class="unit">项</span></span>
-            </div>
+        <div class="kpi-card">
+          <div class="kpi-icon green"><i class="el-icon-picture-outline-round"></i></div>
+          <div class="kpi-text">
+            <span class="kpi-label">今日识别对象</span>
+            <span class="kpi-value">{{ allDetections.length || 0 }}<span class="kpi-unit">项</span></span>
           </div>
-        </el-card>
+        </div>
       </el-col>
       <el-col :span="8">
-        <el-card shadow="hover" class="stat-card deep-forest-gradient">
-          <div class="card-content">
-            <i class="el-icon-data-line stat-icon"></i>
-            <div class="text-group">
-              <span class="stat-label">当前样本成熟占比</span>
-              <span class="stat-value">{{ ripenessStats.riped_ratio || 0 }}<span class="unit">%</span></span>
-            </div>
+        <div class="kpi-card">
+          <div class="kpi-icon teal"><i class="el-icon-data-line"></i></div>
+          <div class="kpi-text">
+            <span class="kpi-label">当前样本成熟占比</span>
+            <span class="kpi-value">{{ ripenessStats.riped_ratio || 0 }}<span class="kpi-unit">%</span></span>
           </div>
-        </el-card>
+        </div>
       </el-col>
       <el-col :span="8">
-        <el-card shadow="hover" class="stat-card coral-warm-gradient">
-          <div class="card-content">
-            <i class="el-icon-warning-outline stat-icon"></i>
-            <div class="text-group">
-              <span class="stat-label">病害风险发现</span>
-              <span :class="['stat-value', { 'warning-pulse': diseaseDetections.length > 0 }]">
-                {{ diseaseDetections.length || 0 }}<span class="unit">处</span>
-              </span>
-            </div>
+        <div class="kpi-card">
+          <div class="kpi-icon coral"><i class="el-icon-warning-outline"></i></div>
+          <div class="kpi-text">
+            <span class="kpi-label">病害风险发现</span>
+            <span :class="['kpi-value', { 'warning-pulse': diseaseDetections.length > 0 }]">{{ diseaseDetections.length || 0 }}<span class="kpi-unit">处</span></span>
           </div>
-        </el-card>
+        </div>
       </el-col>
     </el-row>
 
@@ -110,22 +102,34 @@
 
               <div v-if="loading" class="scan-overlay">
                 <div class="scan-bar"></div>
-                <span class="scan-text">Qwen-Agri 模型推理中...</span>
+                <span class="scan-text">{{ engine === 'llm' ? '多模态视觉分析中...' : 'YOLO 模型推理中...' }}</span>
               </div>
             </div>
             
             <div class="inference-controls">
               <div class="control-row">
                 <div class="control-item">
+                  <span class="control-label">识别引擎</span>
+                  <el-select v-model="engine" size="small" class="custom-select">
+                    <el-option v-for="item in engineOptions" :key="item.value" :label="item.label" :value="item.value"/>
+                  </el-select>
+                </div>
+                <div class="control-item">
                   <span class="control-label">识别模式</span>
-                  <el-select v-model="detectMode" size="small" class="custom-select">
+                  <el-select v-model="detectMode" size="small" class="custom-select" :disabled="engine === 'llm'">
                     <el-option v-for="item in detectModeOptions" :key="item.value" :label="item.label" :value="item.value"/>
                   </el-select>
                 </div>
                 <div class="control-item">
-                  <span class="control-label">作物品种</span>
-                  <el-select v-model="cropType" size="small" class="custom-select" :disabled="detectMode === 'ripeness'">
-                    <el-option v-for="item in availableCropOptions" :key="item.value" :label="item.label" :value="item.value"/>
+                  <span class="control-label">作物品种{{ engine === 'llm' ? '（可留空自动识别）' : '' }}</span>
+                  <el-select v-model="cropType" size="small" class="custom-select"
+                    :disabled="engine !== 'llm' && detectMode === 'ripeness'"
+                    :filterable="engine === 'llm'"
+                    :allow-create="engine === 'llm'"
+                    :clearable="engine === 'llm'"
+                    default-first-option
+                    :placeholder="engine === 'llm' ? '自动识别 / 输入任意作物' : '选择作物'">
+                    <el-option v-for="item in cropOptionsForEngine" :key="item.value" :label="item.label" :value="item.value"/>
                   </el-select>
                 </div>
                 <div class="control-item">
@@ -205,6 +209,25 @@
                   </div>
                 </div>
 
+                <div v-if="analysisResult && (analysisResult.ai_summary || analysisResult.ai_advice)" class="ai-narrative">
+                  <div class="module-title"><i class="el-icon-cpu"></i> AI 多维分析</div>
+                  <p v-if="analysisResult.ai_summary" class="narrative-text">{{ analysisResult.ai_summary }}</p>
+                  <div v-if="analysisResult.ai_advice" class="narrative-advice">
+                    <span class="advice-label">处置建议</span>
+                    <p class="narrative-text">{{ analysisResult.ai_advice }}</p>
+                  </div>
+                </div>
+
+                <div v-if="engine === 'llm' && dimensionRows.length" class="ai-dimensions">
+                  <div class="module-title"><i class="el-icon-data-analysis"></i> 多维判读</div>
+                  <div class="dim-grid">
+                    <div v-for="row in dimensionRows" :key="row.key" class="dim-cell">
+                      <span class="dim-key">{{ row.label }}</span>
+                      <span class="dim-val">{{ row.value }}</span>
+                    </div>
+                  </div>
+                </div>
+
                 <div v-if="allDetections.length" class="ai-prescription">
                   <div class="module-title">对象识别清单 ({{ allDetections.length }}项)</div>
                   <div class="objects-list-clean">
@@ -251,6 +274,20 @@
                 </div>
               </div>
             </transition>
+
+            <div v-if="engine === 'llm' && selectedFile" class="ai-ask">
+              <div class="module-title"><i class="el-icon-chat-dot-round"></i> 对图提问<span class="ask-hint">（多模态视觉，可追问）</span></div>
+              <div v-if="qaList.length" class="qa-list">
+                <div v-for="(qa, i) in qaList" :key="i" class="qa-item">
+                  <div class="qa-q"><span class="qa-tag">问</span><span class="qa-text">{{ qa.q }}</span></div>
+                  <div class="qa-a"><span class="qa-tag a">答</span><span class="qa-text">{{ qa.a }}</span></div>
+                </div>
+              </div>
+              <div class="qa-input-row">
+                <el-input v-model="qaInput" size="small" placeholder="如：这叶子发黄是缺肥还是病害？" :disabled="qaLoading" @keyup.enter="askQuestion"/>
+                <el-button type="primary" size="small" :loading="qaLoading" @click="askQuestion">发送</el-button>
+              </div>
+            </div>
           </div>
         </el-card>
       </el-col>
@@ -282,6 +319,12 @@ const CROP_OPTIONS = [
   { value: 'rice', label: '水稻' }
 ];
 
+// 识别引擎：多模态视觉（任意作物、多维分析，可配豆包/Qwen-VL/硅基流动等）/ 本地 YOLO（固定模型、精确框选计数）
+const ENGINE_OPTIONS = [
+  { value: 'llm', label: '多模态视觉' },
+  { value: 'yolo', label: '本地YOLO' }
+];
+
 const MODE_LABELS = {
   upload: '图片上传',
   video: '视频抽帧',
@@ -300,6 +343,12 @@ export default {
     return {
       demoInspecImg, // 注入占位图
       mode: 'upload',
+      engine: 'llm', // 默认多模态视觉；可切回本地 YOLO
+      llmAvailable: false, // 多模态视觉是否已配置可用
+      llmModel: '', // 当前视觉模型标识
+      qaList: [], // 对图问答记录 [{q,a}]
+      qaInput: '', // 问答输入框
+      qaLoading: false, // 问答请求中
       detectMode: 'both',
       cropType: 'tomato',
       stageView: 'annotated',
@@ -322,6 +371,7 @@ export default {
   // =============== 以下是你原来的 computed 和 methods，我一行都没有删！===============
   computed: {
     modeOptions() { return MODE_OPTIONS; },
+    engineOptions() { return ENGINE_OPTIONS; },
     detectModeOptions() { return DETECT_MODE_OPTIONS; },
     modeLabel() { return MODE_LABELS[this.mode] || '检测输入'; },
     detectModeLabel() { return DETECT_MODE_LABELS[this.detectMode] || 'AI 识别'; },
@@ -332,6 +382,22 @@ export default {
     serviceNote() { return this.serviceOnline ? `支持 ${this.availableCropLabels}` : this.serviceHintText; },
     /** 摄像头/流媒体与分析服务是两条链路，避免画面已出仍显示「引擎离线」造成误解 */
     analysisServiceBadge() {
+      if (this.engine === 'llm') {
+        if (this.llmAvailable) {
+          return {
+            cls: 'online',
+            icon: 'el-icon-success',
+            label: '多模态视觉在线',
+            tip: `视觉模型已就绪（${this.llmModel || '多模态'}），可执行「执行 AI 分析」，支持任意作物多维判读。`
+          };
+        }
+        return {
+          cls: 'offline',
+          icon: 'el-icon-error',
+          label: '视觉模型未配置',
+          tip: '请到「个人中心 → AI 模型配置 → 视觉模型」填写视觉 Key/URL/模型，或切换到「本地YOLO」引擎。'
+        };
+      }
       if (this.serviceOnline) {
         return {
           cls: 'online',
@@ -362,6 +428,16 @@ export default {
       return CROP_OPTIONS.filter(item => this.supportedCrops.includes(item.value));
     },
     availableCropLabels() { return this.availableCropOptions.map(item => item.label).join(' / '); },
+    cropOptionsForEngine() {
+      // 豆包引擎：4 种作物仅作快捷建议，可自由输入任意作物；YOLO：受本地模型限制
+      return this.engine === 'llm' ? CROP_OPTIONS : this.availableCropOptions;
+    },
+    dimensionRows() {
+      const d = this.analysisResult && this.analysisResult.dimensions;
+      if (!d) return [];
+      const labels = { growth_stage: '生长阶段', nutrition: '营养状况', pest: '虫害情况', quality: '品质分级', harvest: '采收期预估' };
+      return Object.keys(labels).filter(k => d[k]).map(k => ({ key: k, label: labels[k], value: d[k] }));
+    },
     resultImageSrc() {
       if (!this.analysisResult) return '';
       if (this.analysisResult.result_image) return this.analysisResult.result_image;
@@ -504,6 +580,24 @@ export default {
     },
     canCreateAlert() { return !!this.analysisResult && !!this.selectedFarm; }
   },
+  watch: {
+    // 切引擎：豆包强制走「综合分析」(both 结构)；切回 YOLO 时把作物类型回退到其支持的英文值
+    engine(val) {
+      if (val === 'llm') {
+        this.detectMode = 'both';
+      } else {
+        const valid = CROP_OPTIONS.some(o => o.value === this.cropType);
+        if (!valid) {
+          const first = this.availableCropOptions[0];
+          this.cropType = first ? first.value : 'tomato';
+        }
+      }
+      this.analysisResult = null;
+      this.qaList = [];
+      this.qaInput = '';
+      this.stageView = this.imagePreview ? 'raw' : 'annotated';
+    }
+  },
   mounted() { this.initializePage(); },
   beforeUnmount() {
     this.revokePreview();
@@ -512,8 +606,19 @@ export default {
   },
   methods: {
     async initializePage() {
-      await Promise.allSettled([this.fetchFarms(), this.fetchServiceStatus()]);
-      this.healthTimer = setInterval(() => { this.fetchServiceStatus(); }, 30000);
+      await Promise.allSettled([this.fetchFarms(), this.fetchServiceStatus(), this.fetchLlmStatus()]);
+      this.healthTimer = setInterval(() => { this.fetchServiceStatus(); this.fetchLlmStatus(); }, 30000);
+    },
+    async fetchLlmStatus() {
+      try {
+        const res = await this.request.get('/crop-analysis/llm/health');
+        const ok = res && (res.code === '200' || res.code === 200) && res.data;
+        this.llmAvailable = !!(ok && res.data.configured);
+        this.llmModel = ok ? (res.data.model || '') : '';
+      } catch (error) {
+        this.llmAvailable = false;
+        this.llmModel = '';
+      }
     },
     normalizeConfidence(value) {
       if (value === null || value === undefined || Number.isNaN(Number(value))) return null;
@@ -585,6 +690,8 @@ export default {
       this.selectedFile = file;
       this.imagePreview = URL.createObjectURL(file);
       this.analysisResult = null;
+      this.qaList = [];
+      this.qaInput = '';
       this.stageView = 'raw';
     },
     handleDrop(event) {
@@ -650,21 +757,34 @@ export default {
     },
     async analyzeCurrentFrame() {
       if (!this.selectedFile) { this.$message.warning('尚未输入有效图像'); return; }
+      if (this.engine === 'llm' && !this.llmAvailable) {
+        this.$message.warning('视觉模型未配置，请到「个人中心 → AI 模型配置 → 视觉模型」填写，或切换到本地YOLO引擎');
+        return;
+      }
       this.loading = true;
       try {
         const formData = new FormData();
         formData.append('file', this.selectedFile);
-        if (this.detectMode !== 'ripeness') {
+        let endpoint;
+        if (this.engine === 'llm') {
+          // 豆包多模态：作物类型仅作提示，模型自行判定
           formData.append('crop_type', this.cropType);
-          formData.append('conf', '0.5');
+          endpoint = '/crop-analysis/llm';
+        } else {
+          endpoint = this.buildEndpoint();
+          if (this.detectMode !== 'ripeness') {
+            formData.append('crop_type', this.cropType);
+            formData.append('conf', '0.5');
+          }
         }
-        const res = await this.request.post(this.buildEndpoint(), formData);
+        const res = await this.request.post(endpoint, formData);
         if (res.code !== '200') throw new Error(res.msg || '引擎分析异常');
         this.analysisResult = res.data || {};
         this.stageView = this.resultImageSrc ? 'annotated' : 'raw';
         this.$message.success('AI 解析生成完毕');
       } catch (error) {
-        this.$message.error(error.message || '识别失败，请检查 Python 引擎');
+        const fallback = this.engine === 'llm' ? '识别失败，请检查视觉模型配置与网络' : '识别失败，请检查 Python 引擎';
+        this.$message.error(error.message || fallback);
       } finally {
         this.loading = false;
       }
@@ -679,6 +799,29 @@ export default {
         currentValue: this.detectMode === 'ripeness' ? ripenessRatio : this.analysisSummary.confidenceValue,
         message, suggestion
       };
+    },
+    async askQuestion() {
+      const q = (this.qaInput || '').trim();
+      if (!q) { this.$message.warning('请输入问题'); return; }
+      if (!this.selectedFile) { this.$message.warning('请先选择或抓拍一张图片'); return; }
+      if (!this.llmAvailable) { this.$message.warning('视觉模型未配置，请到「个人中心 → AI 模型配置 → 视觉模型」填写'); return; }
+      this.qaLoading = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', this.selectedFile);
+        fd.append('question', q);
+        if (this.qaList.length) {
+          fd.append('history', this.qaList.map(p => `问：${p.q}\n答：${p.a}`).join('\n'));
+        }
+        const res = await this.request.post('/crop-analysis/llm/ask', fd);
+        if (res.code !== '200') throw new Error(res.msg || '提问失败');
+        this.qaList.push({ q, a: (res.data && res.data.answer) || '（模型未返回回答）' });
+        this.qaInput = '';
+      } catch (error) {
+        this.$message.error(error.message || '提问失败，请检查视觉模型配置与网络');
+      } finally {
+        this.qaLoading = false;
+      }
     },
     async pushToAlertCenter() {
       if (!this.canCreateAlert) return;
@@ -707,31 +850,40 @@ export default {
   margin: 0 auto;
 }
 
-/* --- 1. 顶部状态卡片 --- */
-.summary-cards { margin-bottom: 24px; }
-.stat-card {
-  border-radius: 12px;
-  border: none !important;
-  color: white;
-  min-height: 116px;
+/* --- 1. 顶部 KPI 卡片（白卡 + 柔色图标，克制端庄）--- */
+.summary-cards { margin-bottom: 20px; }
+.kpi-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: #fff;
+  border: 1px solid #ebf0ed;
+  border-radius: 14px;
+  padding: 18px 22px;
+  box-shadow: 0 4px 18px rgba(47, 72, 59, 0.05);
+  transition: transform .2s ease, box-shadow .2s ease;
 }
-.sage-green-gradient { background: linear-gradient(135deg, #a7c0b0, #739d89) !important; }
-.deep-forest-gradient { background: linear-gradient(135deg, #517161, #2f483b) !important; }
-.coral-warm-gradient { background: linear-gradient(135deg, #ffb88a, #ff9b74) !important; }
+.kpi-card:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(47, 72, 59, 0.08); }
+.kpi-icon {
+  width: 48px; height: 48px;
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px;
+  flex-shrink: 0;
+}
+.kpi-icon.green { background: #e7f1ea; color: #2f8a5f; }
+.kpi-icon.teal  { background: #e3eeec; color: #2f807a; }
+.kpi-icon.coral { background: #fdeee6; color: #e8825a; }
+.kpi-text { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.kpi-label { font-size: 13px; color: #8a958f; font-weight: 500; letter-spacing: .2px; }
+.kpi-value { font-size: 28px; font-weight: 750; color: #1f2d27; line-height: 1; }
+.kpi-unit { font-size: 15px; font-weight: 600; color: #9aa6a0; margin-left: 3px; }
 
-.card-content { display: flex; align-items: center; padding: 12px; height: 100%; }
-.stat-icon { font-size: 34px; margin-right: 18px; opacity: 0.82; }
-.text-group { display: flex; flex-direction: column; }
-.stat-label { font-size: 13px; font-weight: 500; opacity: 0.8; letter-spacing: 0.5px;}
-.stat-value { font-size: 30px; font-weight: 700; margin-top: 4px; line-height: 1.1; }
-.stat-value .unit { font-size: 18px; font-weight: 500; margin-left: 4px; }
-
-/* 警报呼吸灯 */
-.warning-pulse { animation: pulse 2s infinite; }
+/* 病害风险呼吸（>0 时变珊瑚色并轻微脉动）*/
+.warning-pulse { color: #e8825a; animation: pulse 2s infinite; }
 @keyframes pulse {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.05); color: #fff3e0; }
-  100% { transform: scale(1); }
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
 }
 
 /* --- 2. 主体布局 --- */
@@ -777,7 +929,7 @@ export default {
 }
 
 /* --- 3. 左侧视觉沙盒 --- */
-.inference-sandbox { border-radius: 16px; background: white; border: none; height: 100%; display: flex; flex-direction: column;}
+.inference-sandbox { border-radius: 16px; background: white; border: 1px solid #ebf0ed; box-shadow: 0 4px 20px rgba(47, 72, 59, 0.05); height: 100%; display: flex; flex-direction: column;}
 :deep(.inference-sandbox .el-card__body ){ padding: 16px; flex: 1; display: flex; flex-direction: column; }
 
 /* 图像渲染区 */
@@ -821,10 +973,10 @@ export default {
 @keyframes scan { 0% { transform: translateX(-50%); opacity: 0; } 50% { opacity: 1; } 100% { transform: translateX(50%); opacity: 0; } }
 
 /* 底部操作区 */
-.inference-controls { margin-top: 16px; background: #f8faf9; padding: 16px; border-radius: 12px; }
+.inference-controls { margin-top: 16px; background: #f6f9f7; padding: 18px; border-radius: 12px; border: 1px solid #eef2f0; }
 .control-row { display: flex; gap: 16px; }
-.control-item { flex: 1; display: flex; flex-direction: column; gap: 6px;}
-.control-label { color: #64748b; font-size: 12px; font-weight: 600;}
+.control-item { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px;}
+.control-label { color: #6b7770; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 :deep(.custom-select .el-input__wrapper ){ border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: none; }
 :deep(.custom-select .el-input__wrapper.is-focus ){ border-color: #739d89 !important; box-shadow: none; }
 :deep(.custom-select .el-input__inner ){ border: none; border-radius: 0; box-shadow: none; }
@@ -846,7 +998,7 @@ export default {
 .analyze-btn:hover { transform: translateY(-2px); }
 
 /* --- 4. 右侧决策中枢 --- */
-.decision-hub { border-radius: 16px; background: white; border: none; height: 100%; display: flex; flex-direction: column;}
+.decision-hub { border-radius: 16px; background: white; border: 1px solid #ebf0ed; box-shadow: 0 4px 20px rgba(47, 72, 59, 0.05); height: 100%; display: flex; flex-direction: column;}
 :deep(.decision-hub .el-card__body ){ padding: 20px; flex: 1; }
 
 .empty-state { text-align: center; margin-top: 60px; }
@@ -867,6 +1019,41 @@ export default {
 .alert-box.steady .alert-header { color: #166534; }
 .alert-header i { margin-right: 8px; font-size: 18px; }
 .alert-body { font-size: 13px; color: #475569; line-height: 1.8; }
+
+/* AI 多维分析叙述卡 */
+.ai-narrative {
+  margin-bottom: 24px;
+  background: linear-gradient(135deg, #f0f7f3, #eef3f6);
+  border: 1px solid #d9e6df;
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.ai-narrative .module-title { border-bottom: none; margin-bottom: 8px; padding-bottom: 0; }
+.ai-narrative .module-title i { color: #517161; margin-right: 6px; }
+.narrative-text { font-size: 13px; color: #3f4a44; line-height: 1.8; margin: 0; white-space: pre-line; }
+.narrative-advice { margin-top: 12px; padding-top: 12px; border-top: 1px dashed #cfdcd4; }
+.advice-label { display: inline-block; font-size: 12px; font-weight: 700; color: #2f6b4f; background: #dff0e6; padding: 2px 10px; border-radius: 999px; margin-bottom: 6px; }
+
+/* 多维判读网格 */
+.ai-dimensions { margin-bottom: 24px; }
+.dim-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dim-cell { background: #f8faf9; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 2px; }
+.dim-key { font-size: 11px; color: #94a3b8; font-weight: 600; }
+.dim-val { font-size: 13px; color: #1e293b; line-height: 1.5; }
+
+/* 对图提问 */
+.ai-ask { margin-top: 8px; border-top: 1px dashed #e2e8f0; padding-top: 16px; }
+.ask-hint { font-size: 12px; color: #94a3b8; font-weight: 400; margin-left: 6px; }
+.qa-list { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; padding-right: 4px; }
+.qa-list::-webkit-scrollbar { width: 4px; }
+.qa-list::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+.qa-item { display: flex; flex-direction: column; gap: 6px; }
+.qa-q, .qa-a { display: flex; gap: 8px; font-size: 13px; line-height: 1.7; }
+.qa-q .qa-text { color: #1e293b; font-weight: 600; }
+.qa-a .qa-text { color: #475569; background: #f0f7f3; border-radius: 8px; padding: 8px 12px; flex: 1; white-space: pre-line; }
+.qa-tag { flex-shrink: 0; width: 20px; height: 20px; border-radius: 6px; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; color: #fff; background: #739d89; }
+.qa-tag.a { background: #517161; }
+.qa-input-row { display: flex; gap: 8px; }
 
 /* 识别清单列表 */
 .ai-prescription { margin-bottom: 24px; }

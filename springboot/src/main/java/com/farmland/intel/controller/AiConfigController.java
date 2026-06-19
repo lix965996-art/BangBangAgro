@@ -27,6 +27,9 @@ public class AiConfigController {
     @Autowired
     private IAiConfigService aiConfigService;
 
+    @Autowired
+    private com.farmland.intel.service.ChatModelFactory chatModelFactory;
+
     @GetMapping
     public Result getConfig() {
         User user = TokenUtils.getCurrentUser();
@@ -44,7 +47,8 @@ public class AiConfigController {
 
         // 如果前端传的是脱敏 Key（含 ***），则从 DB 取原始 Key
         boolean needFetchExisting = (config.getApiKey() != null && config.getApiKey().contains("***"))
-                || (config.getChatApiKey() != null && config.getChatApiKey().contains("***"));
+                || (config.getChatApiKey() != null && config.getChatApiKey().contains("***"))
+                || (config.getVisionApiKey() != null && config.getVisionApiKey().contains("***"));
         if (needFetchExisting) {
             AiConfig existing = aiConfigService.getByUserId(user.getId());
             if (config.getApiKey() != null && config.getApiKey().contains("***")) {
@@ -53,10 +57,15 @@ public class AiConfigController {
             if (config.getChatApiKey() != null && config.getChatApiKey().contains("***")) {
                 config.setChatApiKey(existing.getChatApiKey());
             }
+            if (config.getVisionApiKey() != null && config.getVisionApiKey().contains("***")) {
+                config.setVisionApiKey(existing.getVisionApiKey());
+            }
         }
 
         config.setUserId(user.getId());
         aiConfigService.saveOrUpdateByUserId(config);
+        // 配置变更后失效该用户的旧 ChatClient 缓存，确保新 key/baseUrl 立即生效
+        chatModelFactory.evictCache(user.getId());
         return Result.success(maskKey(config));
     }
 
@@ -128,9 +137,12 @@ public class AiConfigController {
         copy.setModelName(cfg.getModelName());
         copy.setChatModelName(cfg.getChatModelName());
         copy.setChatBaseUrl(cfg.getChatBaseUrl());
+        copy.setVisionModelName(cfg.getVisionModelName());
+        copy.setVisionBaseUrl(cfg.getVisionBaseUrl());
         copy.setTemperature(cfg.getTemperature());
         copy.setEnabled(cfg.getEnabled());
         copy.setUpdateTime(cfg.getUpdateTime());
+        copy.setAiActionPolicy(cfg.getAiActionPolicy());
         // 主模型 Key 脱敏
         String key = cfg.getApiKey();
         if (key != null && key.length() > 4) {
@@ -144,6 +156,13 @@ public class AiConfigController {
             copy.setChatApiKey(chatKey.substring(0, 4) + "****" + chatKey.substring(chatKey.length() - 2));
         } else {
             copy.setChatApiKey(chatKey);
+        }
+        // 视觉模型 Key 脱敏
+        String visionKey = cfg.getVisionApiKey();
+        if (visionKey != null && visionKey.length() > 4) {
+            copy.setVisionApiKey(visionKey.substring(0, 4) + "****" + visionKey.substring(visionKey.length() - 2));
+        } else {
+            copy.setVisionApiKey(visionKey);
         }
         return copy;
     }

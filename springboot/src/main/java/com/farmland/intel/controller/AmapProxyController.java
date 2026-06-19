@@ -72,7 +72,7 @@ public class AmapProxyController {
 
             // 构建请求URL
             String url = "https://restapi.amap.com/v3/assistant/inputtips";
-            String requestUrl = UriComponentsBuilder.fromHttpUrl(url)
+            String requestUrl = UriComponentsBuilder.fromUriString(url)
                     .queryParam("key", webApiKey)
                     .queryParam("keywords", keywords)
                     .queryParam("city", city)
@@ -140,7 +140,7 @@ public class AmapProxyController {
         }
         
         try {
-            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl("https://restapi.amap.com/v3/geocode/geo")
+            UriComponentsBuilder builder = UriComponentsBuilder.fromUriString("https://restapi.amap.com/v3/geocode/geo")
                     .queryParam("key", webApiKey)
                     .queryParam("address", address)
                     .queryParam("output", "json");
@@ -203,7 +203,7 @@ public class AmapProxyController {
         }
         
         try {
-            String url = UriComponentsBuilder.fromHttpUrl("https://restapi.amap.com/v3/geocode/regeo")
+            String url = UriComponentsBuilder.fromUriString("https://restapi.amap.com/v3/geocode/regeo")
                     .queryParam("key", webApiKey)
                     .queryParam("location", location)
                     .queryParam("extensions", extensions)

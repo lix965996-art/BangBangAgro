@@ -94,11 +94,11 @@ public class BusinessAnalysisController {
         result.put("farmlandName", statistic.getFarm());
         result.put("crop", statistic.getCrop());
         
-        // 获取面积（转换为整数）
-        int area = 0;
+        // 获取面积（支持小数，如 "12.5"；String 列用 Double 解析，避免整数解析把带小数面积归 0）
+        double area = 0;
         if (statistic.getArea() != null) {
             try {
-                area = Integer.parseInt(statistic.getArea().toString());
+                area = Double.parseDouble(statistic.getArea().toString().trim());
             } catch (Exception e) {
                 area = 0;
             }

@@ -71,18 +71,32 @@ public class UserController {
         return Result.success(userService.login(userDTO, getClientIp(request)));
     }
 
-    /** 取真实客户端 IP：优先 X-Forwarded-For / X-Real-IP（经 Nginx 等代理时），兜底 RemoteAddr */
+    /** 取真实客户端 IP：仅当直连来源是可信代理(内网/本机)时才信任 X-Forwarded-For / X-Real-IP，否则用 RemoteAddr，防客户端伪造代理头 */
     private String getClientIp(HttpServletRequest request) {
         if (request == null) return null;
-        String[] headers = {"X-Forwarded-For", "X-Real-IP", "Proxy-Client-IP", "WL-Proxy-Client-IP"};
-        for (String h : headers) {
-            String ip = request.getHeader(h);
-            if (ip != null && !ip.isEmpty() && !"unknown".equalsIgnoreCase(ip)) {
-                int comma = ip.indexOf(',');          // X-Forwarded-For 可能是 "真实IP, 代理IP"
-                return (comma > 0 ? ip.substring(0, comma) : ip).trim();
+        String remote = request.getRemoteAddr();
+        if (isTrustedProxy(remote)) {
+            String[] headers = {"X-Forwarded-For", "X-Real-IP"};
+            for (String h : headers) {
+                String ip = request.getHeader(h);
+                if (ip != null && !ip.isEmpty() && !"unknown".equalsIgnoreCase(ip)) {
+                    int comma = ip.indexOf(',');          // X-Forwarded-For 可能是 "真实IP, 代理IP"
+                    return (comma > 0 ? ip.substring(0, comma) : ip).trim();
+                }
             }
         }
-        return request.getRemoteAddr();
+        return remote;
+    }
+
+    /** 可信代理判定：本机 / 内网(RFC1918) / 链路本地地址才信任代理头 */
+    private boolean isTrustedProxy(String ip) {
+        if (ip == null) return false;
+        try {
+            java.net.InetAddress addr = java.net.InetAddress.getByName(ip);
+            return addr.isLoopbackAddress() || addr.isSiteLocalAddress() || addr.isAnyLocalAddress();
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     @PostMapping("/register")
@@ -240,14 +254,14 @@ public class UserController {
 
     @GetMapping("/{id}")
     public Result findOne(@PathVariable Integer id) {
-        return Result.success(sanitizeUser(userService.getById(id)));
+        return Result.success(sanitizeForViewer(userService.getById(id)));
     }
 
     @GetMapping("/username/{username}")
     public Result findByUsername(@PathVariable String username) {
         QueryWrapper<User> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("username", username);
-        return Result.success(sanitizeUser(userService.getOne(queryWrapper)));
+        return Result.success(sanitizeForViewer(userService.getOne(queryWrapper)));
     }
 
     @GetMapping("/page")
@@ -587,6 +601,20 @@ public class UserController {
             user.setSecurityAnswer(null);
         }
         return user;
+    }
+
+    /** 按当前查看者脱敏：非管理员且非本人时，抹掉登录IP/归属地等敏感字段，防越权窥探 */
+    private User sanitizeForViewer(User target) {
+        if (target == null) return null;
+        sanitizeUser(target);
+        User viewer = TokenUtils.getCurrentUser();
+        boolean canSeeLoginInfo = viewer != null
+                && ("ROLE_ADMIN".equals(viewer.getRole()) || viewer.getId().equals(target.getId()));
+        if (!canSeeLoginInfo) {
+            target.setLastLoginIp(null);
+            target.setLastLoginRegion(null);
+        }
+        return target;
     }
 
     private List<User> sanitizeUsers(List<User> users) {

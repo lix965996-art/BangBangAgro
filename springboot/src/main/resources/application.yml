@@ -113,6 +113,20 @@ deepseek:
   api-url: ${DEEPSEEK_API_URL:https://api.deepseek.com/v1/chat/completions}
   model: ${DEEPSEEK_MODEL:deepseek-chat}
 
+# 多模态视觉分析 —— 病虫害/成熟度直接走多模态大模型（OpenAI 兼容接口，provider 无关）
+# 用途：作物图片一次性判读成熟度 + 病虫害 + 多维分析，覆盖任意作物，无需本地 YOLO 服务
+# 支持任意 OpenAI 兼容的视觉模型，三处对应改即可：
+#   · 豆包/火山方舟：base-url=https://ark.cn-beijing.volces.com/api/v3  model=doubao-1.5-vision-pro-32k-250115（或 ep-xxxx）
+#   · 硅基流动：     base-url=https://api.siliconflow.cn/v1            model=Qwen/Qwen2.5-VL-72B-Instruct（等视觉模型）
+# 本机把 key 等写进已 .gitignore 的 application-local.yml 的 vision.fallback-*；或用环境变量 ARK_*
+vision:
+  enabled: ${VISION_ENABLED:true}
+  base-url: ${ARK_BASE_URL:${vision.fallback-base-url:https://ark.cn-beijing.volces.com/api/v3}}
+  api-key: ${ARK_API_KEY:${vision.fallback-api-key:}}
+  model: ${ARK_VISION_MODEL:${vision.fallback-model:doubao-1.5-vision-pro-32k-250115}}
+  temperature: ${VISION_TEMPERATURE:0.3}
+  timeout-ms: ${VISION_TIMEOUT_MS:60000}
+
 jwt:
   secret: ${JWT_SECRET:bang-bang-agro-dev-secret-key-for-local-only-32chars}
   expire-hours: ${JWT_EXPIRE_HOURS:12}

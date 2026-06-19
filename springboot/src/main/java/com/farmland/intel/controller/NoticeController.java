@@ -54,7 +54,10 @@ public class NoticeController {
     @DeleteMapping("/{id}")
     public Result delete(@PathVariable Integer id) {
         User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             Notice entity = noticeService.getById(id);
             if (entity == null) {
                 return Result.error("404", "记录不存在");
@@ -73,7 +76,10 @@ public class NoticeController {
             return Result.error("400", "删除ID列表不能为空");
         }
         User currentUser = TokenUtils.getCurrentUser();
-        if (currentUser != null && !"ROLE_ADMIN".equals(currentUser.getRole())) {
+        if (currentUser == null) {
+            return Result.error("401", "未登录");
+        }
+        if (!"ROLE_ADMIN".equals(currentUser.getRole())) {
             List<Notice> entities = noticeService.listByIds(ids);
             for (Notice entity : entities) {
                 if (!currentUser.getUsername().equals(entity.getUser())) {
